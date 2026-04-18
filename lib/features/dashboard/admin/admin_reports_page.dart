@@ -5,8 +5,8 @@ import '../../../core/theme/colors.dart';
 import '../../../main.dart';
 import 'admin_report_details_page.dart';
 
-class AdminReportsPage extends StatelessWidget {
-  const AdminReportsPage({super.key});
+class AdminAlertReportsPage extends StatelessWidget {
+  const AdminAlertReportsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -25,59 +25,41 @@ class AdminReportsPage extends StatelessWidget {
         );
         final startOfMonth = DateTime(now.year, now.month, 1);
 
-        int dailyTotal = 0;
-        int dailyResolved = 0;
-        int dailyPending = 0;
-
-        int weeklyTotal = 0;
-        int weeklyResolved = 0;
-        int weeklyPending = 0;
-
-        int monthlyTotal = 0;
-        int monthlyResolved = 0;
-        int monthlyPending = 0;
+        int dailyTotal = 0, dailyResolved = 0, dailyPending = 0;
+        int weeklyTotal = 0, weeklyResolved = 0, weeklyPending = 0;
+        int monthlyTotal = 0, monthlyResolved = 0, monthlyPending = 0;
 
         for (final doc in docs) {
           final data = doc.data() as Map<String, dynamic>;
           final status = (data['status'] ?? '').toString();
           final ts = data['triggeredAt'];
-
           DateTime? dt;
-          if (ts is Timestamp) {
-            dt = ts.toDate();
-          }
-
+          if (ts is Timestamp) dt = ts.toDate();
           if (dt == null) continue;
 
           final isResolved = status == 'Resolved';
-          final isPending =
-              status == 'Triggered' || status == 'Acknowledged';
+          final isPending = status == 'Triggered' || status == 'Acknowledged';
 
           if (!dt.isBefore(startOfToday)) {
             dailyTotal++;
-            if (isResolved) {
+            if (isResolved)
               dailyResolved++;
-            } else if (isPending) {
+            else if (isPending)
               dailyPending++;
-            }
           }
-
           if (!dt.isBefore(startOfWeek)) {
             weeklyTotal++;
-            if (isResolved) {
+            if (isResolved)
               weeklyResolved++;
-            } else if (isPending) {
+            else if (isPending)
               weeklyPending++;
-            }
           }
-
           if (!dt.isBefore(startOfMonth)) {
             monthlyTotal++;
-            if (isResolved) {
+            if (isResolved)
               monthlyResolved++;
-            } else if (isPending) {
+            else if (isPending)
               monthlyPending++;
-            }
           }
         }
 
@@ -130,10 +112,7 @@ class AdminReportsPage extends StatelessWidget {
             elevation: 0,
             scrolledUnderElevation: 0,
             title: Text(
-              lang.text(
-                en: "Reports",
-                ar: "التقارير",
-              ),
+              lang.text(en: "Alert Reports", ar: "تقارير التنبيهات"),
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
@@ -146,7 +125,6 @@ class AdminReportsPage extends StatelessWidget {
                   itemCount: reports.length,
                   itemBuilder: (context, index) {
                     final report = reports[index];
-
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 14),
                       child: InkWell(
@@ -196,27 +174,28 @@ class AdminReportsPage extends StatelessWidget {
                               const SizedBox(width: 14),
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       report["title"] as String,
                                       style: theme.textTheme.titleMedium
                                           ?.copyWith(
-                                        fontWeight: FontWeight.w700,
-                                      ),
+                                            fontWeight: FontWeight.w700,
+                                          ),
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
                                       report["description"] as String,
                                       style: theme.textTheme.bodySmall
                                           ?.copyWith(
-                                        color: AppColors.textSecondary,
-                                      ),
+                                            color: AppColors.textSecondary,
+                                          ),
                                     ),
                                     const SizedBox(height: 8),
                                     Text(
-                                      "${lang.text(en: "Total", ar: "الإجمالي")}: ${report["total"]}   •   ${lang.text(en: "Resolved", ar: "تم الحل")}: ${report["resolved"]}   •   ${lang.text(en: "Pending", ar: "معلّق")}: ${report["pending"]}",
+                                      "${lang.text(en: "Total", ar: "الإجمالي")}: ${report["total"]}   •   "
+                                      "${lang.text(en: "Resolved", ar: "تم الحل")}: ${report["resolved"]}   •   "
+                                      "${lang.text(en: "Pending", ar: "معلّق")}: ${report["pending"]}",
                                       style: const TextStyle(
                                         color: AppColors.textSecondary,
                                         fontSize: 12,

@@ -50,7 +50,10 @@ class AdminSettingsPage extends StatelessWidget {
 
                   _tile(
                     icon: Icons.person_outline_rounded,
-                    title: lang.text(en: "Edit Profile", ar: "تعديل الملف الشخصي"),
+                    title: lang.text(
+                      en: "Edit Profile",
+                      ar: "تعديل الملف الشخصي",
+                    ),
                     subtitle: lang.text(
                       en: "Update your personal information",
                       ar: "تحديث معلوماتك الشخصية",
@@ -72,9 +75,7 @@ class AdminSettingsPage extends StatelessWidget {
                     ),
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const LanguagePage(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const LanguagePage()),
                     ),
                   ),
 
@@ -88,22 +89,26 @@ class AdminSettingsPage extends StatelessWidget {
 
                   _tile(
                     icon: Icons.description_outlined,
-                    title: lang.text(en: "Terms & Policies", ar: "الشروط والسياسات"),
+                    title: lang.text(
+                      en: "Terms & Policies",
+                      ar: "الشروط والسياسات",
+                    ),
                     subtitle: lang.text(
                       en: "Read terms, privacy, and policies",
                       ar: "قراءة الشروط والخصوصية والسياسات",
                     ),
                     onTap: () => Navigator.push(
                       context,
-                      MaterialPageRoute(
-                        builder: (_) => const TermsPage(),
-                      ),
+                      MaterialPageRoute(builder: (_) => const TermsPage()),
                     ),
                   ),
 
                   _tile(
                     icon: Icons.help_outline_rounded,
-                    title: lang.text(en: "Help & Support", ar: "المساعدة والدعم"),
+                    title: lang.text(
+                      en: "Help & Support",
+                      ar: "المساعدة والدعم",
+                    ),
                     subtitle: lang.text(
                       en: "Get assistance and support",
                       ar: "احصل على المساعدة والدعم",
@@ -112,21 +117,6 @@ class AdminSettingsPage extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const HelpSupportPage(),
-                      ),
-                    ),
-                  ),
-
-                  _tile(
-                    icon: Icons.flag_outlined,
-                    title: lang.text(en: "Report a Problem", ar: "الإبلاغ عن مشكلة"),
-                    subtitle: lang.text(
-                      en: "Tell us if something is not working",
-                      ar: "أخبرنا إذا كان هناك شيء لا يعمل",
-                    ),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const ReportProblemPage(),
                       ),
                     ),
                   ),
@@ -165,9 +155,7 @@ class AdminSettingsPage extends StatelessWidget {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
         title: Text(
           lang.text(en: "Log Out", ar: "تسجيل الخروج"),
           style: const TextStyle(
@@ -237,10 +225,12 @@ class AdminSettingsPage extends StatelessWidget {
     required VoidCallback onTap,
     bool isRed = false,
   }) {
-    final Color iconColor =
-        isRed ? AppColors.emergencyRed : AppColors.textPrimary;
-    final Color titleColor =
-        isRed ? AppColors.emergencyRed : AppColors.textPrimary;
+    final Color iconColor = isRed
+        ? AppColors.emergencyRed
+        : AppColors.textPrimary;
+    final Color titleColor = isRed
+        ? AppColors.emergencyRed
+        : AppColors.textPrimary;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -258,9 +248,7 @@ class AdminSettingsPage extends StatelessWidget {
       ),
       child: ListTile(
         onTap: onTap,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(22),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 18,
           vertical: 10,

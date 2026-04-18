@@ -20,7 +20,7 @@ class _AdminShellState extends State<AdminShell> {
   final List<Widget> _pages = [
     const AdminDashboard(),
     const AdminUserManagementPage(),
-    const AdminReportsPage(),
+    const AdminAlertReportsPage(),
     const AdminSettingsPage(),
   ];
 
@@ -35,10 +35,7 @@ class _AdminShellState extends State<AdminShell> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _pages,
-      ),
+      body: IndexedStack(index: _selectedIndex, children: _pages),
       bottomNavigationBar: Container(
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         padding: const EdgeInsets.symmetric(vertical: 6),
@@ -66,15 +63,9 @@ class _AdminShellState extends State<AdminShell> {
             fontWeight: FontWeight.w700,
             fontSize: 12,
           ),
-          unselectedLabelStyle: const TextStyle(
-            fontSize: 11,
-          ),
+          unselectedLabelStyle: const TextStyle(fontSize: 11),
           items: [
-            _item(
-              Icons.home_rounded,
-              lang.text(en: "Home", ar: "الرئيسية"),
-              0,
-            ),
+            _item(Icons.home_rounded, lang.text(en: "Home", ar: "الرئيسية"), 0),
             _item(
               Icons.people_rounded,
               lang.text(en: "Users", ar: "المستخدمون"),
