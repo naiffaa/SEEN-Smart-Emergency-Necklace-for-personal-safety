@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:seen/features/dashboard/admin/admin_alert_reports_page.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../main.dart';
@@ -20,7 +21,7 @@ class _AdminShellState extends State<AdminShell> {
   final List<Widget> _pages = [
     const AdminDashboard(),
     const AdminUserManagementPage(),
-    const AdminAlertReportsPage(),
+    const AdminReportsPage(),
     const AdminSettingsPage(),
   ];
 
