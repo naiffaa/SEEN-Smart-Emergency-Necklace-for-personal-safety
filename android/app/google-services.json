@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "696462825579",
+    "project_id": "seen-e1615",
+    "storage_bucket": "seen-e1615.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:696462825579:android:f3caa1de84bb9b7b17792e",
+        "android_client_info": {
+          "package_name": "com.example.seen"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDGkIAtfP50DZ2RrZVGSyGSATF70eyuu6k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
