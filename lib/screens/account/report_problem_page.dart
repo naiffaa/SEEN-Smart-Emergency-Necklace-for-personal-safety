@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../core/theme/colors.dart';
 import '../../main.dart';
@@ -13,6 +15,7 @@ class ReportProblemPage extends StatefulWidget {
 class _ReportProblemPageState extends State<ReportProblemPage> {
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
+  bool _isSubmitting = false;
 
   bool get _isFormValid =>
       _titleController.text.isNotEmpty &&
@@ -23,6 +26,52 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _submitReport() async {
+    if (!_isFormValid) return;
+    setState(() => _isSubmitting = true);
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      await FirebaseFirestore.instance.collection('issues').add({
+        'title': _titleController.text.trim(),
+        'description': _descriptionController.text.trim(),
+        'submittedAt': FieldValue.serverTimestamp(),
+        'userId': user?.uid ?? 'unknown',
+        'userEmail': user?.email ?? 'unknown',
+        'status': 'Pending',
+      });
+
+      if (!mounted) return;
+      final lang = appLanguage;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            lang.text(
+              en: "Report submitted successfully",
+              ar: "تم إرسال التقرير بنجاح",
+            ),
+          ),
+        ),
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      final lang = appLanguage;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            lang.text(
+              en: "Failed to submit report. Please try again.",
+              ar: "فشل إرسال التقرير. يرجى المحاولة مرة أخرى.",
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -58,9 +107,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                 color: AppColors.textSecondary,
               ),
             ),
-
             const SizedBox(height: 20),
-
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(22),
@@ -91,9 +138,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                       size: 38,
                     ),
                   ),
-
                   const SizedBox(height: 18),
-
                   Text(
                     lang.text(en: "Submit an Issue", ar: "إرسال مشكلة"),
                     textAlign: TextAlign.center,
@@ -101,9 +146,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-
                   const SizedBox(height: 10),
-
                   Text(
                     lang.text(
                       en: "Share the issue title and a short description so we can help you faster.",
@@ -114,9 +157,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                       color: AppColors.textSecondary,
                     ),
                   ),
-
                   const SizedBox(height: 28),
-
                   _buildField(
                     context,
                     label: lang.text(en: "Issue Title", ar: "عنوان المشكلة"),
@@ -127,9 +168,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                     ),
                     onChanged: (_) => setState(() {}),
                   ),
-
                   const SizedBox(height: 18),
-
                   _buildField(
                     context,
                     label: lang.text(en: "Description", ar: "الوصف"),
@@ -141,9 +180,7 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                     maxLines: 5,
                     onChanged: (_) => setState(() {}),
                   ),
-
                   const SizedBox(height: 20),
-
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -174,30 +211,28 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
                       ],
                     ),
                   ),
-
                   const SizedBox(height: 26),
-
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: _isFormValid
-                          ? () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    lang.text(
-                                      en: "Report submitted successfully",
-                                      ar: "تم إرسال التقرير بنجاح",
-                                    ),
-                                  ),
-                                ),
-                              );
-                              Navigator.pop(context);
-                            }
+                      onPressed: (_isFormValid && !_isSubmitting)
+                          ? _submitReport
                           : null,
-                      child: Text(
-                        lang.text(en: "Submit Report", ar: "إرسال التقرير"),
-                      ),
+                      child: _isSubmitting
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(
+                              lang.text(
+                                en: "Submit Report",
+                                ar: "إرسال التقرير",
+                              ),
+                            ),
                     ),
                   ),
                 ],
@@ -218,7 +253,6 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
     int maxLines = 1,
   }) {
     final theme = Theme.of(context);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

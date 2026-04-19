@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/colors.dart';
@@ -10,10 +11,6 @@ class AdminIssuesReportPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final lang = appLanguage;
-
-    // TODO: Replace this with a real Firestore stream when ready.
-    // stream: FirebaseFirestore.instance.collection('issues').snapshots()
-    final List<Map<String, dynamic>> issues = [];
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -28,8 +25,20 @@ class AdminIssuesReportPage extends StatelessWidget {
           ),
         ),
       ),
-      body: issues.isEmpty
-          ? Center(
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('issues')
+            .orderBy('submittedAt', descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final docs = snapshot.data?.docs ?? [];
+
+          if (docs.isEmpty) {
+            return Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -50,69 +59,139 @@ class AdminIssuesReportPage extends StatelessWidget {
                   ),
                 ],
               ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
-              itemCount: issues.length,
-              itemBuilder: (context, index) {
-                final issue = issues[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 14),
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: AppColors.border),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: AppColors.shadow,
-                          blurRadius: 12,
-                          offset: Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: AppColors.surfaceSoft,
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.report_problem_outlined,
-                            color: AppColors.textPrimary,
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                issue["title"] as String? ?? "Issue",
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                issue["description"] as String? ?? "",
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+            );
+          }
+
+          return ListView.builder(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 30),
+            itemCount: docs.length,
+            itemBuilder: (context, index) {
+              final data = docs[index].data() as Map<String, dynamic>;
+              final title = data['title'] as String? ?? 'No Title';
+              final description = data['description'] as String? ?? '';
+              final status = data['status'] as String? ?? 'Pending';
+              final email = data['userEmail'] as String? ?? '';
+              final ts = data['submittedAt'];
+              String dateStr = '';
+              if (ts is Timestamp) {
+                final dt = ts.toDate();
+                dateStr =
+                    "${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}";
+              }
+
+              final isResolved = status == 'Resolved';
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(22),
+                    border: Border.all(color: AppColors.border),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: AppColors.shadow,
+                        blurRadius: 12,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
                   ),
-                );
-              },
-            ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceSoft,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Icon(
+                          Icons.report_problem_outlined,
+                          color: isResolved
+                              ? AppColors.success
+                              : AppColors.emergencyRed,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              description,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 3,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: isResolved
+                                        ? AppColors.success.withOpacity(0.1)
+                                        : AppColors.emergencyRed.withOpacity(
+                                            0.1,
+                                          ),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    status,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: isResolved
+                                          ? AppColors.success
+                                          : AppColors.emergencyRed,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                if (email.isNotEmpty)
+                                  Expanded(
+                                    child: Text(
+                                      email,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                if (dateStr.isNotEmpty)
+                                  Text(
+                                    dateStr,
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
