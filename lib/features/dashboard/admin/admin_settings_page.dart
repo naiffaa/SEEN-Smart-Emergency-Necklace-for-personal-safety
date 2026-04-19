@@ -8,7 +8,6 @@ import '../../../screens/account/edit_profile_page.dart';
 import '../../../screens/account/language_page.dart';
 import '../../../screens/account/terms_page.dart';
 import '../../../screens/account/help_support_page.dart';
-import '../../../screens/account/report_problem_page.dart';
 import '../../onboarding/home_screen.dart';
 
 class AdminSettingsPage extends StatelessWidget {
