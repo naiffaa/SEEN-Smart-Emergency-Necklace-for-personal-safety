@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
+import 'package:firebase_core/firebase_core.dart';
 import '../../core/theme/colors.dart';
 import '../../main.dart';
 
@@ -34,7 +34,12 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
 
     try {
       final user = FirebaseAuth.instance.currentUser;
-      await FirebaseFirestore.instance.collection('issues').add({
+
+      debugPrint('Firebase project: ${Firebase.app().options.projectId}');
+      debugPrint('Current user uid: ${user?.uid}');
+      debugPrint('Current user email: ${user?.email}');
+
+      final docRef = await FirebaseFirestore.instance.collection('issues').add({
         'title': _titleController.text.trim(),
         'description': _descriptionController.text.trim(),
         'submittedAt': FieldValue.serverTimestamp(),
@@ -42,6 +47,12 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
         'userEmail': user?.email ?? 'unknown',
         'status': 'Pending',
       });
+
+      debugPrint('Issue created with id: ${docRef.id}');
+
+      final snapshot = await docRef.get();
+      debugPrint('Doc exists: ${snapshot.exists}');
+      debugPrint('Doc data: ${snapshot.data()}');
 
       if (!mounted) return;
       final lang = appLanguage;
@@ -56,7 +67,10 @@ class _ReportProblemPageState extends State<ReportProblemPage> {
         ),
       );
       Navigator.pop(context);
-    } catch (e) {
+    } catch (e, s) {
+      debugPrint('Submit report error: $e');
+      debugPrint('$s');
+
       if (!mounted) return;
       final lang = appLanguage;
       ScaffoldMessenger.of(context).showSnackBar(
