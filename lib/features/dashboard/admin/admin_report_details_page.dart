@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../main.dart';
@@ -20,6 +23,85 @@ class AdminReportDetailsPage extends StatelessWidget {
     required this.pendingAlerts,
   });
 
+  Future<void> _exportPdf(BuildContext context) async {
+    final lang = appLanguage;
+    final now = DateTime.now();
+    final dateStr =
+        "${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}";
+
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                title,
+                style: pw.TextStyle(
+                  fontSize: 24,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text(description, style: const pw.TextStyle(fontSize: 13)),
+              pw.SizedBox(height: 24),
+              pw.Divider(),
+              pw.SizedBox(height: 16),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+                children: [
+                  _pdfMetric(
+                    lang.text(en: "Total Alerts", ar: "إجمالي التنبيهات"),
+                    totalAlerts.toString(),
+                  ),
+                  _pdfMetric(
+                    lang.text(en: "Resolved", ar: "تم الحل"),
+                    resolvedAlerts.toString(),
+                  ),
+                  _pdfMetric(
+                    lang.text(en: "Pending", ar: "معلّق"),
+                    pendingAlerts.toString(),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 24),
+              pw.Divider(),
+              pw.SizedBox(height: 16),
+              pw.Text(
+                lang.text(
+                  en: "Generated: $dateStr",
+                  ar: "تاريخ الإنشاء: $dateStr",
+                ),
+                style: const pw.TextStyle(fontSize: 11),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+      name: '$title - $dateStr',
+    );
+  }
+
+  pw.Widget _pdfMetric(String label, String value) {
+    return pw.Column(
+      children: [
+        pw.Text(
+          value,
+          style: pw.TextStyle(fontSize: 28, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(label, style: const pw.TextStyle(fontSize: 12)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -29,12 +111,13 @@ class AdminReportDetailsPage extends StatelessWidget {
     final String generatedDate =
         "${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}";
 
-    final double maxY = [
-      totalAlerts.toDouble(),
-      resolvedAlerts.toDouble(),
-      pendingAlerts.toDouble(),
-      5,
-    ].reduce((a, b) => a > b ? a : b) +
+    final double maxY =
+        [
+          totalAlerts.toDouble(),
+          resolvedAlerts.toDouble(),
+          pendingAlerts.toDouble(),
+          5,
+        ].reduce((a, b) => a > b ? a : b) +
         2;
 
     return Scaffold(
@@ -96,10 +179,7 @@ class AdminReportDetailsPage extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: _metricCard(
-                    label: lang.text(
-                      en: "Resolved",
-                      ar: "تم الحل",
-                    ),
+                    label: lang.text(en: "Resolved", ar: "تم الحل"),
                     value: resolvedAlerts.toString(),
                     color: AppColors.success,
                     icon: Icons.check_circle_outline_rounded,
@@ -108,10 +188,7 @@ class AdminReportDetailsPage extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: _metricCard(
-                    label: lang.text(
-                      en: "Pending",
-                      ar: "قيد الانتظار",
-                    ),
+                    label: lang.text(en: "Pending", ar: "قيد الانتظار"),
                     value: pendingAlerts.toString(),
                     color: AppColors.emergencyRed,
                     icon: Icons.pending_actions_rounded,
@@ -172,26 +249,17 @@ class AdminReportDetailsPage extends StatelessWidget {
                                 switch (value.toInt()) {
                                   case 0:
                                     return Text(
-                                      lang.text(
-                                        en: "Total",
-                                        ar: "الإجمالي",
-                                      ),
+                                      lang.text(en: "Total", ar: "الإجمالي"),
                                       style: const TextStyle(fontSize: 11),
                                     );
                                   case 1:
                                     return Text(
-                                      lang.text(
-                                        en: "Resolved",
-                                        ar: "تم الحل",
-                                      ),
+                                      lang.text(en: "Resolved", ar: "تم الحل"),
                                       style: const TextStyle(fontSize: 11),
                                     );
                                   case 2:
                                     return Text(
-                                      lang.text(
-                                        en: "Pending",
-                                        ar: "معلق",
-                                      ),
+                                      lang.text(en: "Pending", ar: "معلق"),
                                       style: const TextStyle(fontSize: 11),
                                     );
                                   default:
@@ -210,10 +278,8 @@ class AdminReportDetailsPage extends StatelessWidget {
                         gridData: FlGridData(
                           show: true,
                           drawVerticalLine: false,
-                          getDrawingHorizontalLine: (value) => FlLine(
-                            color: Colors.black12,
-                            strokeWidth: 1,
-                          ),
+                          getDrawingHorizontalLine: (value) =>
+                              FlLine(color: Colors.black12, strokeWidth: 1),
                         ),
                         borderData: FlBorderData(show: false),
                         barGroups: [
@@ -281,18 +347,7 @@ class AdminReportDetailsPage extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        lang.text(
-                          en: "PDF export is not connected yet.",
-                          ar: "تصدير PDF غير مربوط بعد.",
-                        ),
-                      ),
-                    ),
-                  );
-                },
+                onPressed: () => _exportPdf(context),
                 icon: const Icon(Icons.download_rounded, color: Colors.white),
                 label: Text(
                   lang.text(
@@ -325,10 +380,7 @@ class AdminReportDetailsPage extends StatelessWidget {
         const SizedBox(width: 5),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: AppColors.textPrimary,
-          ),
+          style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
         ),
       ],
     );
