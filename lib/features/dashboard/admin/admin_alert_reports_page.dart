@@ -20,14 +20,16 @@ class AdminAlertReportsPage extends StatelessWidget {
 
         final now = DateTime.now();
         final startOfToday = DateTime(now.year, now.month, now.day);
-        final startOfWeek = startOfToday.subtract(
-          Duration(days: now.weekday - 1),
-        );
+        final startOfWeek = startOfToday.subtract(const Duration(days: 6));
         final startOfMonth = DateTime(now.year, now.month, 1);
 
         int dailyTotal = 0, dailyResolved = 0, dailyPending = 0;
         int weeklyTotal = 0, weeklyResolved = 0, weeklyPending = 0;
         int monthlyTotal = 0, monthlyResolved = 0, monthlyPending = 0;
+
+        final List<QueryDocumentSnapshot> dailyDocs = [];
+        final List<QueryDocumentSnapshot> weeklyDocs = [];
+        final List<QueryDocumentSnapshot> monthlyDocs = [];
 
         for (final doc in docs) {
           final data = doc.data() as Map<String, dynamic>;
@@ -42,6 +44,7 @@ class AdminAlertReportsPage extends StatelessWidget {
 
           if (!dt.isBefore(startOfToday)) {
             dailyTotal++;
+            dailyDocs.add(doc);
             if (isResolved)
               dailyResolved++;
             else if (isPending)
@@ -49,6 +52,7 @@ class AdminAlertReportsPage extends StatelessWidget {
           }
           if (!dt.isBefore(startOfWeek)) {
             weeklyTotal++;
+            weeklyDocs.add(doc);
             if (isResolved)
               weeklyResolved++;
             else if (isPending)
@@ -56,6 +60,7 @@ class AdminAlertReportsPage extends StatelessWidget {
           }
           if (!dt.isBefore(startOfMonth)) {
             monthlyTotal++;
+            monthlyDocs.add(doc);
             if (isResolved)
               monthlyResolved++;
             else if (isPending)
@@ -76,6 +81,7 @@ class AdminAlertReportsPage extends StatelessWidget {
             "total": dailyTotal,
             "resolved": dailyResolved,
             "pending": dailyPending,
+            "docs": dailyDocs,
           },
           {
             "title": lang.text(
@@ -89,6 +95,7 @@ class AdminAlertReportsPage extends StatelessWidget {
             "total": weeklyTotal,
             "resolved": weeklyResolved,
             "pending": weeklyPending,
+            "docs": weeklyDocs,
           },
           {
             "title": lang.text(
@@ -102,6 +109,7 @@ class AdminAlertReportsPage extends StatelessWidget {
             "total": monthlyTotal,
             "resolved": monthlyResolved,
             "pending": monthlyPending,
+            "docs": monthlyDocs,
           },
         ];
 
@@ -139,6 +147,9 @@ class AdminAlertReportsPage extends StatelessWidget {
                                 totalAlerts: report["total"] as int,
                                 resolvedAlerts: report["resolved"] as int,
                                 pendingAlerts: report["pending"] as int,
+                                alertDocs:
+                                    report["docs"]
+                                        as List<QueryDocumentSnapshot>,
                               ),
                             ),
                           );

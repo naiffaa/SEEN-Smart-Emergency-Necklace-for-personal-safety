@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:pdf/pdf.dart';
@@ -6,6 +7,7 @@ import 'package:printing/printing.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../main.dart';
+import 'admin_alerts_list_page.dart';
 
 class AdminReportDetailsPage extends StatelessWidget {
   final String title;
@@ -13,6 +15,7 @@ class AdminReportDetailsPage extends StatelessWidget {
   final int totalAlerts;
   final int resolvedAlerts;
   final int pendingAlerts;
+  final List<QueryDocumentSnapshot> alertDocs;
 
   const AdminReportDetailsPage({
     super.key,
@@ -21,6 +24,7 @@ class AdminReportDetailsPage extends StatelessWidget {
     required this.totalAlerts,
     required this.resolvedAlerts,
     required this.pendingAlerts,
+    required this.alertDocs,
   });
 
   Future<void> _exportPdf(BuildContext context) async {
@@ -30,7 +34,6 @@ class AdminReportDetailsPage extends StatelessWidget {
         "${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}";
 
     final pdf = pw.Document();
-
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
@@ -120,6 +123,17 @@ class AdminReportDetailsPage extends StatelessWidget {
         ].reduce((a, b) => a > b ? a : b) +
         2;
 
+    final resolvedDocs = alertDocs.where((d) {
+      final data = d.data() as Map<String, dynamic>;
+      return (data['status'] ?? '') == 'Resolved';
+    }).toList();
+
+    final pendingDocs = alertDocs.where((d) {
+      final data = d.data() as Map<String, dynamic>;
+      final s = (data['status'] ?? '').toString();
+      return s == 'Triggered' || s == 'Acknowledged';
+    }).toList();
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -167,6 +181,7 @@ class AdminReportDetailsPage extends StatelessWidget {
               children: [
                 Expanded(
                   child: _metricCard(
+                    context: context,
                     label: lang.text(
                       en: "Total Alerts",
                       ar: "إجمالي التنبيهات",
@@ -174,24 +189,41 @@ class AdminReportDetailsPage extends StatelessWidget {
                     value: totalAlerts.toString(),
                     color: AppColors.textPrimary,
                     icon: Icons.warning_amber_rounded,
+                    docs: alertDocs,
+                    filterLabel: lang.text(
+                      en: "All Alerts",
+                      ar: "جميع التنبيهات",
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _metricCard(
+                    context: context,
                     label: lang.text(en: "Resolved", ar: "تم الحل"),
                     value: resolvedAlerts.toString(),
                     color: AppColors.success,
                     icon: Icons.check_circle_outline_rounded,
+                    docs: resolvedDocs,
+                    filterLabel: lang.text(
+                      en: "Resolved Alerts",
+                      ar: "التنبيهات المحلولة",
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _metricCard(
+                    context: context,
                     label: lang.text(en: "Pending", ar: "قيد الانتظار"),
                     value: pendingAlerts.toString(),
                     color: AppColors.emergencyRed,
                     icon: Icons.pending_actions_rounded,
+                    docs: pendingDocs,
+                    filterLabel: lang.text(
+                      en: "Pending Alerts",
+                      ar: "التنبيهات المعلقة",
+                    ),
                   ),
                 ),
               ],
@@ -387,56 +419,76 @@ class AdminReportDetailsPage extends StatelessWidget {
   }
 
   Widget _metricCard({
+    required BuildContext context,
     required String label,
     required String value,
     required Color color,
     required IconData icon,
+    required List<QueryDocumentSnapshot> docs,
+    required String filterLabel,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.border),
-        boxShadow: const [
-          BoxShadow(
-            color: AppColors.shadow,
-            blurRadius: 12,
-            offset: Offset(0, 4),
+    return InkWell(
+      borderRadius: BorderRadius.circular(22),
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AdminAlertsListPage(title: filterLabel, docs: docs),
           ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.surfaceSoft,
-              borderRadius: BorderRadius.circular(14),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: AppColors.border),
+          boxShadow: const [
+            BoxShadow(
+              color: AppColors.shadow,
+              blurRadius: 12,
+              offset: Offset(0, 4),
             ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: TextStyle(
-              color: color,
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
+          ],
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceSoft,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color, size: 20),
             ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.textSecondary,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: TextStyle(
+                color: color,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-            textAlign: TextAlign.center,
-          ),
-        ],
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 12,
+              color: color.withOpacity(0.6),
+            ),
+          ],
+        ),
       ),
     );
   }
