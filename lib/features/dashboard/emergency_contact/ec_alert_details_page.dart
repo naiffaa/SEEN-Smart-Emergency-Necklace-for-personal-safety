@@ -27,13 +27,14 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
     final lang = appLanguage;
     try {
       setState(() => isUpdating = true);
+
       await FirebaseFirestore.instance
           .collection('alerts')
           .doc(widget.alertId)
           .update({
-            'status': newStatus,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+        'status': newStatus,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -66,7 +67,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
 
   Future<void> _callUser(String phone) async {
     final lang = appLanguage;
-    final cleaned = phone.trim();
+    final cleaned = phone.replaceAll(' ', '').trim();
 
     if (cleaned.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -83,7 +84,24 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
     }
 
     final Uri uri = Uri(scheme: 'tel', path: cleaned);
+
     try {
+      final canLaunch = await canLaunchUrl(uri);
+      if (!canLaunch) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              lang.text(
+                en: "Could not open the dialer.",
+                ar: "تعذر فتح تطبيق الاتصال.",
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+
       await launchUrl(uri);
     } catch (_) {
       if (!mounted) return;
@@ -102,6 +120,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
 
   Future<void> _openLiveLocation(double? lat, double? lng) async {
     final lang = appLanguage;
+
     if (lat == null || lng == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -139,6 +158,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
 
   Future<void> _openWebStream(String url) async {
     final lang = appLanguage;
+
     if (url.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -154,6 +174,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
     }
 
     final Uri uri = Uri.parse(url);
+
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
@@ -173,6 +194,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
 
   Future<void> _copyStreamLink(String url) async {
     final lang = appLanguage;
+
     if (url.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -193,24 +215,51 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          lang.text(en: "Stream link copied.", ar: "تم نسخ رابط البث."),
+          lang.text(
+            en: "Stream link copied.",
+            ar: "تم نسخ رابط البث.",
+          ),
         ),
       ),
     );
   }
 
-  String _extractPhone(Map<String, dynamic> alert) {
-    final candidates = [
-      alert['userPhone'],
-      alert['phone'],
-      alert['phoneNumber'],
-      alert['user_number'],
+  String _extractPhoneFromMap(Map<String, dynamic> data) {
+    final possibleFields = [
+      'userPhone',
+      'phone',
+      'phoneNumber',
+      'mobile',
+      'user_number',
     ];
 
-    for (final value in candidates) {
-      final phone = (value ?? '').toString().trim();
-      if (phone.isNotEmpty) return phone;
+    for (final key in possibleFields) {
+      final value = data[key];
+      if (value != null && value.toString().trim().isNotEmpty) {
+        return value.toString().trim();
+      }
     }
+    return '';
+  }
+
+  Future<String> _resolvePhoneNumber(Map<String, dynamic> alertData) async {
+    final directPhone = _extractPhoneFromMap(alertData);
+    if (directPhone.isNotEmpty) return directPhone;
+
+    final userId = (alertData['userId'] ?? '').toString().trim();
+    if (userId.isNotEmpty) {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(userId)
+          .get();
+
+      if (userDoc.exists) {
+        final userData = userDoc.data() ?? {};
+        final userPhone = _extractPhoneFromMap(userData);
+        if (userPhone.isNotEmpty) return userPhone;
+      }
+    }
+
     return '';
   }
 
@@ -233,8 +282,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
         }
 
         final latestAlert =
-            (alertSnapshot.data?.data() as Map<String, dynamic>?) ??
-            widget.alert;
+            (alertSnapshot.data?.data() as Map<String, dynamic>?) ?? widget.alert;
 
         final String userName =
             (latestAlert["userName"] ??
@@ -246,9 +294,8 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                     lang.text(en: "Unknown Location", ar: "موقع غير معروف"))
                 .toString();
 
-        final String status = (latestAlert["status"] ?? "Triggered").toString();
-
-        final String phone = _extractPhone(latestAlert);
+        final String status =
+            (latestAlert["status"] ?? "Triggered").toString();
 
         final double? lat = latestAlert["lat"] is num
             ? (latestAlert["lat"] as num).toDouble()
@@ -270,252 +317,247 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
         final Color statusColor = _statusColor(status);
         final Color statusBg = _statusBg(status);
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('live_sessions')
-              .where('alertId', isEqualTo: widget.alertId)
-              .limit(1)
-              .snapshots(),
-          builder: (context, liveSnapshot) {
-            Map<String, dynamic>? liveData;
-            if (liveSnapshot.hasData && liveSnapshot.data!.docs.isNotEmpty) {
-              liveData =
-                  liveSnapshot.data!.docs.first.data() as Map<String, dynamic>;
-            }
+        return FutureBuilder<String>(
+          future: _resolvePhoneNumber(latestAlert),
+          builder: (context, phoneSnapshot) {
+            final String phone = phoneSnapshot.data ?? '';
 
-            final String streamUrl =
-                (liveData?['streamUrl'] ?? latestAlert['streamUrl'] ?? '')
-                    .toString();
+            return StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('live_sessions')
+                  .where('alertId', isEqualTo: widget.alertId)
+                  .limit(1)
+                  .snapshots(),
+              builder: (context, liveSnapshot) {
+                Map<String, dynamic>? liveData;
+                if (liveSnapshot.hasData && liveSnapshot.data!.docs.isNotEmpty) {
+                  liveData = liveSnapshot.data!.docs.first.data()
+                      as Map<String, dynamic>;
+                }
 
-            final String streamStatus =
-                (liveData?['streamStatus'] ??
-                        latestAlert['streamStatus'] ??
-                        (streamUrl.isNotEmpty ? 'ready' : 'unavailable'))
-                    .toString();
+                final String streamUrl =
+                    (liveData?['streamUrl'] ?? latestAlert['streamUrl'] ?? '')
+                        .toString();
 
-            final bool isLive =
-                liveData?['isLive'] == true || streamUrl.isNotEmpty;
+                final String streamStatus =
+                    (liveData?['streamStatus'] ??
+                            latestAlert['streamStatus'] ??
+                            (streamUrl.isNotEmpty ? 'ready' : 'unavailable'))
+                        .toString();
 
-            return Scaffold(
-              backgroundColor: AppColors.background,
-              appBar: AppBar(
-                backgroundColor: AppColors.background,
-                elevation: 0,
-                scrolledUnderElevation: 0,
-                title: Text(
-                  lang.text(en: "Alert Details", ar: "تفاصيل التنبيه"),
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
+                final bool isLive =
+                    liveData?['isLive'] == true || streamUrl.isNotEmpty;
+
+                return Scaffold(
+                  backgroundColor: AppColors.background,
+                  appBar: AppBar(
+                    backgroundColor: AppColors.background,
+                    elevation: 0,
+                    scrolledUnderElevation: 0,
+                    title: Text(
+                      lang.text(en: "Alert Details", ar: "تفاصيل التنبيه"),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              body: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                child: Column(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: statusBg,
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      child: Column(
-                        children: [
-                          Icon(
-                            status == "Resolved"
-                                ? Icons.check_circle_rounded
-                                : Icons.warning_amber_rounded,
-                            color: statusColor,
-                            size: 42,
+                  body: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: statusBg,
+                            borderRadius: BorderRadius.circular(22),
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            _localizedStatus(status, lang),
-                            style: TextStyle(
-                              color: statusColor,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 18,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: AppColors.border),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: AppColors.shadow,
-                            blurRadius: 12,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          _info(
-                            lang.text(en: "User", ar: "المستخدم"),
-                            userName,
-                          ),
-                          _info(
-                            lang.text(en: "Location", ar: "الموقع"),
-                            location,
-                          ),
-                          _info(
-                            lang.text(en: "Time", ar: "الوقت"),
-                            formattedTime,
-                          ),
-                          _info(
-                            lang.text(en: "GPS", ar: "نظام GPS"),
-                            gpsFix
-                                ? lang.text(en: "Available", ar: "متوفر")
-                                : lang.text(en: "Not fixed", ar: "غير مثبت"),
-                          ),
-                          if (phone.isNotEmpty)
-                            _info(lang.text(en: "Phone", ar: "الهاتف"), phone),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: AppColors.border),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: AppColors.shadow,
-                            blurRadius: 12,
-                            offset: Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            lang.text(en: "Live Stream", ar: "البث المباشر"),
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          _info(
-                            lang.text(en: "Status", ar: "الحالة"),
-                            _localizedStreamStatus(streamStatus, lang),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            streamUrl.isNotEmpty
-                                ? streamUrl
-                                : lang.text(
-                                    en: "No live stream link available yet.",
-                                    ar: "لا يوجد رابط بث مباشر متاح حتى الآن.",
-                                  ),
-                            style: const TextStyle(
-                              color: AppColors.textSecondary,
-                              height: 1.5,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton.icon(
-                              onPressed: streamUrl.isEmpty
-                                  ? null
-                                  : () => _openWebStream(streamUrl),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
+                          child: Column(
+                            children: [
+                              Icon(
+                                status == "Resolved"
+                                    ? Icons.check_circle_rounded
+                                    : Icons.warning_amber_rounded,
+                                color: statusColor,
+                                size: 42,
                               ),
-                              icon: const Icon(Icons.open_in_new_rounded),
-                              label: Text(
-                                lang.text(
-                                  en: "Open Web Stream",
-                                  ar: "فتح رابط البث",
+                              const SizedBox(height: 10),
+                              Text(
+                                _localizedStatus(status, lang),
+                                style: TextStyle(
+                                  color: statusColor,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 18,
                                 ),
                               ),
-                            ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: streamUrl.isEmpty
-                                  ? null
-                                  : () => _copyStreamLink(streamUrl),
-                              icon: const Icon(Icons.link_rounded),
-                              label: Text(
-                                lang.text(
-                                  en: "Copy Stream Link",
-                                  ar: "نسخ رابط البث",
-                                ),
+                        ),
+                        const SizedBox(height: 20),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: AppColors.border),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: AppColors.shadow,
+                                blurRadius: 12,
+                                offset: Offset(0, 4),
                               ),
-                            ),
+                            ],
                           ),
-                          if (isLive && streamUrl.isNotEmpty) ...[
-                            const SizedBox(height: 10),
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 10,
+                          child: Column(
+                            children: [
+                              _info(lang.text(en: "User", ar: "المستخدم"), userName),
+                              _info(lang.text(en: "Location", ar: "الموقع"), location),
+                              _info(lang.text(en: "Time", ar: "الوقت"), formattedTime),
+                              _info(
+                                lang.text(en: "GPS", ar: "نظام GPS"),
+                                gpsFix
+                                    ? lang.text(en: "Available", ar: "متوفر")
+                                    : lang.text(en: "Not fixed", ar: "غير مثبت"),
                               ),
-                              decoration: BoxDecoration(
-                                color: AppColors.successSoft,
-                                borderRadius: BorderRadius.circular(14),
+                              if (phone.isNotEmpty)
+                                _info(lang.text(en: "Phone", ar: "الهاتف"), phone),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(20),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: AppColors.border),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: AppColors.shadow,
+                                blurRadius: 12,
+                                offset: Offset(0, 4),
                               ),
-                              child: Text(
-                                lang.text(
-                                  en: "Live stream link is ready.",
-                                  ar: "رابط البث المباشر جاهز.",
-                                ),
-                                style: const TextStyle(
-                                  color: AppColors.success,
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                lang.text(en: "Live Stream", ar: "البث المباشر"),
+                                style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 ),
                               ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    if (status != "Resolved")
-                      _actionButton(
-                        label: lang.text(
-                          en: "Mark as Resolved",
-                          ar: "تحديد كمحلول",
+                              const SizedBox(height: 10),
+                              _info(
+                                lang.text(en: "Status", ar: "الحالة"),
+                                _localizedStreamStatus(streamStatus, lang),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                streamUrl.isNotEmpty
+                                    ? streamUrl
+                                    : lang.text(
+                                        en: "No live stream link available yet.",
+                                        ar: "لا يوجد رابط بث مباشر متاح حتى الآن.",
+                                      ),
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  height: 1.5,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: streamUrl.isEmpty
+                                      ? null
+                                      : () => _openWebStream(streamUrl),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primary,
+                                  ),
+                                  icon: const Icon(Icons.open_in_new_rounded),
+                                  label: Text(
+                                    lang.text(
+                                      en: "Open Web Stream",
+                                      ar: "فتح رابط البث",
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: streamUrl.isEmpty
+                                      ? null
+                                      : () => _copyStreamLink(streamUrl),
+                                  icon: const Icon(Icons.link_rounded),
+                                  label: Text(
+                                    lang.text(
+                                      en: "Copy Stream Link",
+                                      ar: "نسخ رابط البث",
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              if (isLive && streamUrl.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  width: double.infinity,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.successSoft,
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Text(
+                                    lang.text(
+                                      en: "Live stream link is ready.",
+                                      ar: "رابط البث المباشر جاهز.",
+                                    ),
+                                    style: const TextStyle(
+                                      color: AppColors.success,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                        color: AppColors.success,
-                        onTap: () => _updateStatus("Resolved"),
-                      ),
-                    _actionButton(
-                      label: lang.text(
-                        en: "Call User",
-                        ar: "الاتصال بالمستخدم",
-                      ),
-                      color: AppColors.emergencyRed,
-                      onTap: () => _callUser(phone),
+                        const SizedBox(height: 24),
+                        if (status != "Resolved")
+                          _actionButton(
+                            label: lang.text(
+                              en: "Mark as Resolved",
+                              ar: "تحديد كمحلول",
+                            ),
+                            color: AppColors.success,
+                            onTap: () => _updateStatus("Resolved"),
+                          ),
+                        _actionButton(
+                          label: lang.text(en: "Call User", ar: "الاتصال بالمستخدم"),
+                          color: AppColors.emergencyRed,
+                          onTap: () => _callUser(phone),
+                        ),
+                        _actionButton(
+                          label: lang.text(
+                            en: "View Live Location",
+                            ar: "عرض الموقع المباشر",
+                          ),
+                          color: AppColors.primary,
+                          onTap: () => _openLiveLocation(lat, lng),
+                        ),
+                      ],
                     ),
-                    _actionButton(
-                      label: lang.text(
-                        en: "View Live Location",
-                        ar: "عرض الموقع المباشر",
-                      ),
-                      color: AppColors.primary,
-                      onTap: () => _openLiveLocation(lat, lng),
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              },
             );
           },
         );
