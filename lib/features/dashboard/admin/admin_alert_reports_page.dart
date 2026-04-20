@@ -34,7 +34,7 @@ class AdminAlertReportsPage extends StatelessWidget {
           final status = (data['status'] ?? '').toString();
           final ts = data['triggeredAt'];
           DateTime? dt;
-          if (ts is Timestamp) dt = ts.toDate();
+          if (ts is Timestamp) dt = ts.toDate().toLocal();
           if (dt == null) continue;
 
           final isResolved = status == 'Resolved';
