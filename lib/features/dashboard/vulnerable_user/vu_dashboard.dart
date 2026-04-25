@@ -30,6 +30,8 @@ class _VUDashboardState extends State<VUDashboard> {
 
   double? _liveLat;
   double? _liveLng;
+  int? _liveBattery;
+
   String _liveDeviceStatus = "Safe";
   String? _lastStreamUrl;
 
@@ -43,10 +45,39 @@ class _VUDashboardState extends State<VUDashboard> {
     return double.tryParse(v.toString());
   }
 
-  int _toInt(dynamic v) {
-    if (v == null) return 0;
+  int? _toNullableInt(dynamic v) {
+    if (v == null) return null;
     if (v is num) return v.toInt();
-    return int.tryParse(v.toString()) ?? 0;
+    return int.tryParse(v.toString());
+  }
+
+  int _bestBattery({
+    required dynamic userBattery,
+    required dynamic deviceBattery,
+  }) {
+    final live = _liveBattery;
+    final userValue = _toNullableInt(userBattery);
+    final deviceValue = _toNullableInt(deviceBattery);
+
+    if (live != null && live > 0) return live;
+    if (userValue != null && userValue > 0) return userValue;
+    if (deviceValue != null && deviceValue > 0) return deviceValue;
+
+    return live ?? userValue ?? deviceValue ?? 0;
+  }
+
+  String _batteryText(int battery, dynamic lang) {
+    if (battery <= 0) {
+      return lang.text(en: "Reading...", ar: "جارٍ القراءة...");
+    }
+    return "$battery%";
+  }
+
+  Color _batteryColor(int battery) {
+    if (battery <= 0) return AppColors.textSecondary;
+    if (battery <= 20) return AppColors.emergencyRed;
+    if (battery <= 40) return Colors.orange;
+    return AppColors.success;
   }
 
   @override
@@ -56,13 +87,13 @@ class _VUDashboardState extends State<VUDashboard> {
     BleSyncService.instance.start();
     _bleSub = _ble.messageStream.listen(_handleBleMessageForUi);
 
-    _statusTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+    _statusTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
       if (!_ble.isConnected) return;
       try {
         await _ble.getBattery();
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 180));
         await _ble.getGps();
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 180));
         await _ble.getMic();
       } catch (_) {}
     });
@@ -78,6 +109,13 @@ class _VUDashboardState extends State<VUDashboard> {
 
     if (message.isDisarmed) {
       setState(() => _liveDeviceStatus = "Safe");
+      return;
+    }
+
+    if (message.isBattery) {
+      setState(() {
+        _liveBattery = message.battery;
+      });
       return;
     }
 
@@ -222,7 +260,8 @@ class _VUDashboardState extends State<VUDashboard> {
       'triggeredAt': FieldValue.serverTimestamp(),
       'createdAt': FieldValue.serverTimestamp(),
       'durationSeconds': 60,
-      'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(minutes: 1))),
+      'expiresAt':
+          Timestamp.fromDate(DateTime.now().add(const Duration(minutes: 1))),
       'emergencyContactIds': contactIds,
       'streamStatus': 'unavailable',
       'streamUrl': null,
@@ -283,181 +322,186 @@ class _VUDashboardState extends State<VUDashboard> {
       );
     }
 
-    final displayName = user.displayName?.trim().isNotEmpty == true
-        ? user.displayName!.trim()
-        : lang.text(en: "there", ar: "");
-
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: AppColors.background,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        centerTitle: false,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              lang.text(en: "Good morning", ar: "صباح الخير"),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: AppColors.textSecondary,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              lang.text(
-                en: "Stay safe, $displayName",
-                ar: "ابقَ بأمان، $displayName",
-              ),
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ),
       body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-        stream: FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
+        stream:
+            FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots(),
         builder: (context, userSnapshot) {
           final userData = userSnapshot.data?.data() ?? {};
 
-          return StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('users')
-                .doc(user.uid)
-                .collection('devices')
-                .snapshots(),
-            builder: (context, snapshot) {
-              final hasDevice = snapshot.hasData && snapshot.data!.docs.isNotEmpty;
-              final deviceDoc = hasDevice ? snapshot.data!.docs.first : null;
-              final deviceData =
-                  hasDevice ? deviceDoc!.data() as Map<String, dynamic> : null;
+          final displayName = (userData['name'] ??
+                  userData['fullName'] ??
+                  user.displayName ??
+                  user.email?.split('@').first ??
+                  lang.text(en: "User", ar: "المستخدم"))
+              .toString()
+              .trim();
 
-              final deviceId = deviceDoc?.id ?? userData['pairedDeviceId']?.toString();
+          return SafeArea(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(user.uid)
+                  .collection('devices')
+                  .snapshots(),
+              builder: (context, snapshot) {
+                final hasDevice = snapshot.hasData && snapshot.data!.docs.isNotEmpty;
+                final deviceDoc = hasDevice ? snapshot.data!.docs.first : null;
+                final deviceData =
+                    hasDevice ? deviceDoc!.data() as Map<String, dynamic> : null;
 
-              final deviceName = (deviceData?['name'] ??
-                      userData['pairedDeviceName'] ??
-                      lang.text(en: "No Device Paired", ar: "لا يوجد جهاز مقترن"))
-                  .toString();
+                final deviceId =
+                    deviceDoc?.id ?? userData['pairedDeviceId']?.toString();
 
-              final deviceStatus = _ble.isConnected
-                  ? "Connected"
-                  : (deviceData?['status'] ?? userData['status'] ?? _liveDeviceStatus)
-                      .toString();
+                final deviceName = (deviceData?['name'] ??
+                        userData['pairedDeviceName'] ??
+                        lang.text(en: "No Device Paired", ar: "لا يوجد جهاز مقترن"))
+                    .toString();
 
-              final batteryLevel =
-                  _toInt(deviceData?['battery'] ?? userData['battery']);
+                final deviceStatus = _ble.isConnected
+                    ? "Connected"
+                    : (deviceData?['status'] ?? userData['status'] ?? _liveDeviceStatus)
+                        .toString();
 
-              final lat = _toDouble(userData['lat']) ??
-                  _toDouble(deviceData?['lat']) ??
-                  _liveLat;
-              final lng = _toDouble(userData['lng']) ??
-                  _toDouble(deviceData?['lng']) ??
-                  _liveLng;
+                final batteryLevel = _bestBattery(
+                  userBattery: userData['battery'],
+                  deviceBattery: deviceData?['battery'],
+                );
 
-              final hasLocation = _hasValidCoords(lat, lng);
-              final locationText = hasLocation
-                  ? "${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}"
-                  : lang.text(en: "Waiting GPS...", ar: "بانتظار GPS...");
+                final lat =
+                    _toDouble(userData['lat']) ?? _toDouble(deviceData?['lat']) ?? _liveLat;
+                final lng =
+                    _toDouble(userData['lng']) ?? _toDouble(deviceData?['lng']) ?? _liveLng;
 
-              final isSafe = deviceStatus.toLowerCase() == "safe" ||
-                  deviceStatus.toLowerCase() == "connected";
+                final hasLocation = _hasValidCoords(lat, lng);
+                final locationText = hasLocation
+                    ? "${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}"
+                    : lang.text(en: "Waiting for GPS fix", ar: "بانتظار تثبيت GPS");
 
-              return SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!hasDevice) _noDeviceCard(lang),
-                    if (hasDevice)
-                      _deviceStatusCard(
-                        context: context,
-                        theme: theme,
-                        lang: lang,
-                        deviceName: deviceName,
-                        deviceStatus: deviceStatus,
-                        batteryLevel: batteryLevel,
-                        locationText: locationText,
-                        hasLocation: hasLocation,
-                        isSafe: isSafe,
-                        lat: lat,
-                        lng: lng,
-                        userId: user.uid,
-                      ),
-                    const SizedBox(height: 24),
-                    _sosButton(lang),
-                    const SizedBox(height: 28),
-                    Text(
-                      lang.text(en: "Quick Actions", ar: "الإجراءات السريعة"),
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.map_outlined,
-                            title: lang.text(en: "Location", ar: "الموقع"),
-                            subtitle: hasLocation
-                                ? lang.text(en: "Open live map", ar: "فتح الخريطة")
-                                : lang.text(en: "Waiting GPS", ar: "بانتظار GPS"),
-                            onTap: hasDevice
-                                ? () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => DeviceLocationScreen(
-                                          deviceName: deviceName,
-                                          lat: hasLocation ? lat : null,
-                                          lng: hasLocation ? lng : null,
-                                          userId: user.uid,
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _actionCard(
-                            icon: Icons.history_rounded,
-                            title: lang.text(en: "Evidence", ar: "الأدلة"),
-                            subtitle: lang.text(
-                              en: "Audio & stream history",
-                              ar: "سجل الصوت والبث",
-                            ),
-                            onTap: hasDevice
-                                ? () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) => DeviceHistoryScreen(
-                                          deviceName: deviceName,
-                                          deviceId: deviceId,
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                : null,
-                          ),
-                        ),
-                      ],
-                    ),
-                    if ((_lastStreamUrl ?? '').trim().isNotEmpty) ...[
+                final isSafe = deviceStatus.toLowerCase() == "safe" ||
+                    deviceStatus.toLowerCase() == "connected";
+
+                return SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _header(theme, lang, displayName),
                       const SizedBox(height: 18),
-                      _streamCard(lang, _lastStreamUrl!),
+                      if (!hasDevice) _noDeviceCard(lang),
+                      if (hasDevice)
+                        _deviceStatusCard(
+                          context: context,
+                          theme: theme,
+                          lang: lang,
+                          deviceName: deviceName,
+                          deviceStatus: deviceStatus,
+                          batteryLevel: batteryLevel,
+                          locationText: locationText,
+                          hasLocation: hasLocation,
+                          isSafe: isSafe,
+                          lat: lat,
+                          lng: lng,
+                          userId: user.uid,
+                        ),
+                      const SizedBox(height: 24),
+                      _sosButton(lang),
+                      const SizedBox(height: 28),
+                      Text(
+                        lang.text(en: "Quick Actions", ar: "الإجراءات السريعة"),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _actionCard(
+                              icon: Icons.location_on_outlined,
+                              title: lang.text(en: "Location", ar: "الموقع"),
+                              subtitle: hasLocation
+                                  ? lang.text(en: "Open live map", ar: "فتح الخريطة")
+                                  : lang.text(en: "Waiting for GPS", ar: "بانتظار GPS"),
+                              onTap: hasDevice
+                                  ? () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => DeviceLocationScreen(
+                                            deviceName: deviceName,
+                                            lat: hasLocation ? lat : null,
+                                            lng: hasLocation ? lng : null,
+                                            userId: user.uid,
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  : null,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: _actionCard(
+                              icon: Icons.history_rounded,
+                              title: lang.text(en: "Evidence", ar: "الأدلة"),
+                              subtitle: lang.text(
+                                en: "Audio & video history",
+                                ar: "سجل الصوت والفيديو",
+                              ),
+                              onTap: hasDevice
+                                  ? () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => DeviceHistoryScreen(
+                                            deviceName: deviceName,
+                                            deviceId: deviceId,
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  : null,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if ((_lastStreamUrl ?? '').trim().isNotEmpty) ...[
+                        const SizedBox(height: 18),
+                        _streamCard(lang, _lastStreamUrl!),
+                      ],
                     ],
-                  ],
-                ),
-              );
-            },
+                  ),
+                );
+              },
+            ),
           );
         },
       ),
+    );
+  }
+
+  Widget _header(ThemeData theme, dynamic lang, String displayName) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          lang.text(en: "Welcome back,", ar: "مرحبًا بعودتك،"),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          displayName,
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w800,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
     );
   }
 
@@ -499,6 +543,8 @@ class _VUDashboardState extends State<VUDashboard> {
     required double? lng,
     required String userId,
   }) {
+    final batteryColor = _batteryColor(batteryLevel);
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -529,38 +575,20 @@ class _VUDashboardState extends State<VUDashboard> {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: _cleanMetric(
-                  icon: Icons.battery_charging_full_rounded,
-                  label: lang.text(en: "Battery", ar: "البطارية"),
-                  value: "$batteryLevel%",
-                  color: batteryLevel > 20
-                      ? AppColors.success
-                      : AppColors.emergencyRed,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _cleanMetric(
-                  icon: hasLocation
-                      ? Icons.gps_fixed_rounded
-                      : Icons.gps_not_fixed_rounded,
-                  label: lang.text(en: "GPS", ar: "GPS"),
-                  value: hasLocation
-                      ? lang.text(en: "Fixed", ar: "ثابت")
-                      : lang.text(en: "Waiting", ar: "انتظار"),
-                  color: hasLocation
-                      ? AppColors.success
-                      : AppColors.textSecondary,
-                ),
-              ),
-            ],
+          _batteryPanel(
+            lang: lang,
+            batteryLevel: batteryLevel,
+            color: batteryColor,
           ),
           const SizedBox(height: 14),
-          InkWell(
-            borderRadius: BorderRadius.circular(18),
+          _infoTile(
+            icon: hasLocation
+                ? Icons.location_on_rounded
+                : Icons.location_searching_rounded,
+            iconColor: hasLocation ? AppColors.primary : AppColors.textSecondary,
+            title: lang.text(en: "Current Location", ar: "الموقع الحالي"),
+            subtitle: locationText,
+            trailing: Icons.arrow_forward_ios_rounded,
             onTap: () {
               Navigator.push(
                 context,
@@ -574,46 +602,140 @@ class _VUDashboardState extends State<VUDashboard> {
                 ),
               );
             },
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceSoft,
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    hasLocation
-                        ? Icons.location_on_rounded
-                        : Icons.location_searching_rounded,
-                    color: hasLocation
-                        ? AppColors.primary
-                        : AppColors.textSecondary,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      locationText,
-                      style: TextStyle(
-                        color: hasLocation
-                            ? AppColors.textPrimary
-                            : AppColors.textSecondary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  const Icon(
-                    Icons.arrow_forward_ios_rounded,
-                    size: 14,
+          ),
+          const SizedBox(height: 10),
+          _infoTile(
+            icon: _ble.isConnected
+                ? Icons.bluetooth_connected_rounded
+                : Icons.bluetooth_disabled_rounded,
+            iconColor: _ble.isConnected ? AppColors.success : AppColors.textSecondary,
+            title: lang.text(en: "Device Connection", ar: "اتصال الجهاز"),
+            subtitle: _ble.isConnected
+                ? lang.text(en: "Connected to SEEN necklace", ar: "متصل بقلادة SEEN")
+                : lang.text(en: "Not connected", ar: "غير متصل"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _batteryPanel({
+    required dynamic lang,
+    required int batteryLevel,
+    required Color color,
+  }) {
+    final batteryText = _batteryText(batteryLevel, lang);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceSoft,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            batteryLevel <= 20 && batteryLevel > 0
+                ? Icons.battery_alert_rounded
+                : Icons.battery_charging_full_rounded,
+            color: color,
+            size: 28,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  lang.text(en: "Battery Level", ar: "مستوى البطارية"),
+                  style: const TextStyle(
                     color: AppColors.textSecondary,
+                    fontSize: 13,
                   ),
-                ],
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  batteryText,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            width: 68,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(30),
+              child: LinearProgressIndicator(
+                value: batteryLevel <= 0
+                    ? 0
+                    : (batteryLevel.clamp(0, 100) / 100),
+                minHeight: 8,
+                backgroundColor: AppColors.border,
+                color: color,
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _infoTile({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required String subtitle,
+    IconData? trailing,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceSoft,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 21),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (trailing != null)
+              Icon(
+                trailing,
+                size: 14,
+                color: AppColors.textSecondary,
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -767,43 +889,6 @@ class _VUDashboardState extends State<VUDashboard> {
     );
   }
 
-  Widget _cleanMetric({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceSoft,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 22),
-          const SizedBox(height: 8),
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textPrimary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _actionCard({
     required IconData icon,
     required String title,
@@ -817,6 +902,7 @@ class _VUDashboardState extends State<VUDashboard> {
       child: Opacity(
         opacity: isDisabled ? 0.55 : 1,
         child: Container(
+          height: 138,
           padding: const EdgeInsets.all(16),
           decoration: _cardDecoration(),
           child: Column(
@@ -826,6 +912,8 @@ class _VUDashboardState extends State<VUDashboard> {
               const SizedBox(height: 14),
               Text(
                 title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.w700,
@@ -833,12 +921,16 @@ class _VUDashboardState extends State<VUDashboard> {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: AppColors.textSecondary,
-                  height: 1.4,
+              Expanded(
+                child: Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                    height: 1.4,
+                  ),
                 ),
               ),
             ],

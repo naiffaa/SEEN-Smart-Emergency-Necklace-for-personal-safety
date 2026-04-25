@@ -7,6 +7,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/seen_ble_message.dart';
+import 'evidence_video_service.dart';
 import 'seen_ble_service.dart';
 
 class BleSyncService {
@@ -82,7 +83,6 @@ class BleSyncService {
 
     if (msg.isSos) {
       await _handleSos(uid, user, msg);
-      return;
     }
   }
 
@@ -136,11 +136,7 @@ class BleSyncService {
     debugPrint('BLE SYNC STATUS SAVED: ${msg.type}');
   }
 
-  Future<void> _handleSos(
-    String uid,
-    User user,
-    SeenBleMessage msg,
-  ) async {
+  Future<void> _handleSos(String uid, User user, SeenBleMessage msg) async {
     final now = DateTime.now();
 
     final lat = msg.lat ?? _lastGps?.lat;
@@ -181,8 +177,8 @@ class BleSyncService {
 
     final audioStatus = espAudioUrl.isNotEmpty ? 'recording' : 'unavailable';
 
-    debugPrint('BLE SYNC SOS STARTED alertId=${alertRef.id}');
-    debugPrint('ESP AUDIO URL: $espAudioUrl');
+    debugPrint('SOS: streamUrl=$streamUrl');
+    debugPrint('SOS: espAudioUrl=$espAudioUrl');
 
     await alertRef.set({
       'alertId': alertRef.id,
@@ -207,6 +203,7 @@ class BleSyncService {
       'audioEnabled': espAudioUrl.isNotEmpty,
       'audioSource': 'necklace',
       'audioRecordingStatus': audioStatus,
+      'videoRecordingStatus': streamUrl.isNotEmpty ? 'pending' : 'unavailable',
       'battery': battery,
       'batteryVoltage': voltage,
       'micLevel': micLevel,
@@ -229,6 +226,7 @@ class BleSyncService {
       'audioEnabled': espAudioUrl.isNotEmpty,
       'audioSource': 'necklace',
       'audioRecordingStatus': audioStatus,
+      'videoRecordingStatus': streamUrl.isNotEmpty ? 'pending' : 'unavailable',
       'battery': battery,
       'batteryVoltage': voltage,
       'micLevel': micLevel,
@@ -275,12 +273,13 @@ class BleSyncService {
     );
 
     if (espAudioUrl.isNotEmpty) {
-      _finishEspAudioEvidenceUpload(
+      _finishEvidenceUpload(
         uid: uid,
         deviceId: deviceId,
         alertId: alertRef.id,
         alertRef: alertRef,
         espAudioUrl: espAudioUrl,
+        streamUrl: streamUrl,
         lat: validGps ? lat : null,
         lng: validGps ? lng : null,
         gpsFix: gpsFix,
@@ -300,9 +299,7 @@ class BleSyncService {
   String? _extractFieldFromRaw(String? raw, String key) {
     if (raw == null || raw.trim().isEmpty) return null;
 
-    final parts = raw.split('|');
-
-    for (final part in parts) {
+    for (final part in raw.split('|')) {
       final index = part.indexOf('=');
       if (index == -1) continue;
 
@@ -317,24 +314,21 @@ class BleSyncService {
 
   String _resolveDeviceIdFromUserData(Map<String, dynamic> userData) {
     final fromFirestore = userData['pairedDeviceId']?.toString();
-    if (fromFirestore != null && fromFirestore.isNotEmpty) {
-      return fromFirestore;
-    }
+    if (fromFirestore != null && fromFirestore.isNotEmpty) return fromFirestore;
 
     final fromBle = SeenBleService.instance.connectedDeviceId;
-    if (fromBle != null && fromBle.isNotEmpty) {
-      return fromBle;
-    }
+    if (fromBle != null && fromBle.isNotEmpty) return fromBle;
 
     return 'SEEN_DEVICE';
   }
 
-  void _finishEspAudioEvidenceUpload({
+  void _finishEvidenceUpload({
     required String uid,
     required String deviceId,
     required String alertId,
     required DocumentReference<Map<String, dynamic>> alertRef,
     required String espAudioUrl,
+    required String streamUrl,
     required double? lat,
     required double? lng,
     required bool gpsFix,
@@ -348,7 +342,9 @@ class BleSyncService {
   }) {
     Future.delayed(const Duration(seconds: 18), () async {
       try {
-        debugPrint('ESP AUDIO: downloading from $espAudioUrl');
+        debugPrint('EVIDENCE: starting upload for alertId=$alertId');
+        debugPrint('EVIDENCE: ESP audio URL=$espAudioUrl');
+        debugPrint('EVIDENCE: stream URL=$streamUrl');
 
         final firebaseAudioUrl = await _downloadAndUploadEspAudio(
           uid: uid,
@@ -356,16 +352,37 @@ class BleSyncService {
           espAudioUrl: espAudioUrl,
         );
 
-        if (firebaseAudioUrl == null || firebaseAudioUrl.isEmpty) {
-          debugPrint('ESP AUDIO: upload failed');
+        debugPrint('EVIDENCE: firebaseAudioUrl=$firebaseAudioUrl');
 
+        if (firebaseAudioUrl == null || firebaseAudioUrl.isEmpty) {
           await alertRef.set({
             'audioRecordingStatus': 'failed',
             'audioUploadError': 'ESP audio download/upload failed',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
-
           return;
+        }
+
+        String? videoUrl;
+
+        if (streamUrl.trim().isNotEmpty) {
+          await alertRef.set({
+            'videoRecordingStatus': 'processing',
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+
+          debugPrint('VIDEO: STARTING CREATE VIDEO');
+
+          videoUrl = await EvidenceVideoService.instance.createAndUploadVideo(
+            uid: uid,
+            alertId: alertId,
+            streamUrl: streamUrl,
+            audioUrl: firebaseAudioUrl,
+          );
+
+          debugPrint('VIDEO RESULT URL: $videoUrl');
+        } else {
+          debugPrint('VIDEO: skipped, streamUrl is empty');
         }
 
         await alertRef.set({
@@ -373,6 +390,8 @@ class BleSyncService {
           'espAudioUrl': espAudioUrl,
           'audioSource': 'necklace',
           'audioRecordingStatus': 'uploaded',
+          'videoUrl': videoUrl,
+          'videoRecordingStatus': videoUrl == null ? 'failed' : 'uploaded',
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 
@@ -387,6 +406,8 @@ class BleSyncService {
             'espAudioUrl': espAudioUrl,
             'audioSource': 'necklace',
             'audioRecordingStatus': 'uploaded',
+            'videoUrl': videoUrl,
+            'videoRecordingStatus': videoUrl == null ? 'failed' : 'uploaded',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
@@ -398,14 +419,19 @@ class BleSyncService {
             .doc(deviceId)
             .collection('history')
             .add({
-          'title': 'Audio Evidence',
-          'eventType': 'audio',
+          'title': videoUrl == null ? 'Audio Evidence' : 'Audio/Video Evidence',
+          'eventType': videoUrl == null ? 'audio' : 'audio_video',
           'status': 'Uploaded',
-          'details': 'SOS audio recording from SEEN necklace saved.',
+          'details': videoUrl == null
+              ? 'SOS audio recording from SEEN necklace saved.'
+              : 'SOS audio and video evidence from SEEN necklace saved.',
           'alertId': alertId,
           'audioUrl': firebaseAudioUrl,
+          'videoUrl': videoUrl,
           'espAudioUrl': espAudioUrl,
+          'streamUrl': streamUrl,
           'audioSource': 'necklace',
+          'videoSource': 'necklace_stream',
           'lat': lat,
           'lng': lng,
           'gpsFix': gpsFix,
@@ -430,9 +456,13 @@ class BleSyncService {
           for (final doc in incidents.docs) {
             await doc.reference.set({
               'audioUrl': firebaseAudioUrl,
+              'videoUrl': videoUrl,
               'espAudioUrl': espAudioUrl,
+              'streamUrl': streamUrl,
               'audioSource': 'necklace',
+              'videoSource': 'necklace_stream',
               'audioRecordingStatus': 'uploaded',
+              'videoRecordingStatus': videoUrl == null ? 'failed' : 'uploaded',
               'updatedAt': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
           }
@@ -444,19 +474,24 @@ class BleSyncService {
               .doc(uid)
               .set({
             'audioUrl': firebaseAudioUrl,
+            'videoUrl': videoUrl,
             'espAudioUrl': espAudioUrl,
+            'streamUrl': streamUrl,
             'audioSource': 'necklace',
+            'videoSource': 'necklace_stream',
             'audioRecordingStatus': 'uploaded',
+            'videoRecordingStatus': videoUrl == null ? 'failed' : 'uploaded',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
 
-        debugPrint('ESP AUDIO: uploaded and saved');
+        debugPrint('ESP AUDIO/VIDEO: uploaded and saved');
       } catch (e) {
-        debugPrint('ESP AUDIO ERROR: $e');
+        debugPrint('ESP AUDIO/VIDEO ERROR: $e');
 
         await alertRef.set({
           'audioRecordingStatus': 'failed',
+          'videoRecordingStatus': 'failed',
           'audioUploadError': e.toString(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
@@ -487,11 +522,11 @@ class BleSyncService {
       final bytes = await consolidateHttpClientResponseBytes(response);
 
       if (bytes.isEmpty) {
-        debugPrint('ESP AUDIO: empty audio file');
+        debugPrint('ESP AUDIO: empty bytes');
         return null;
       }
 
-      debugPrint('ESP AUDIO: downloaded ${bytes.length} bytes');
+      debugPrint('ESP AUDIO: downloaded bytes=${bytes.length}');
 
       final safeUid = uid.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
       final safeAlertId = alertId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
@@ -518,7 +553,8 @@ class BleSyncService {
       );
 
       final downloadUrl = await storageRef.getDownloadURL();
-      debugPrint('ESP AUDIO: Firebase URL=$downloadUrl');
+
+      debugPrint('ESP AUDIO: uploaded URL=$downloadUrl');
 
       return downloadUrl;
     } catch (e) {
@@ -609,6 +645,7 @@ class BleSyncService {
         'audioEnabled': audioEnabled,
         'audioSource': 'necklace',
         'audioRecordingStatus': audioRecordingStatus,
+        'videoRecordingStatus': hasStream ? 'pending' : 'unavailable',
         'expiresAt': expiresAt,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -636,6 +673,7 @@ class BleSyncService {
         'audioEnabled': audioEnabled,
         'audioSource': 'necklace',
         'audioRecordingStatus': audioRecordingStatus,
+        'videoRecordingStatus': hasStream ? 'pending' : 'unavailable',
         'battery': battery,
         'batteryVoltage': batteryVoltage,
         'micLevel': micLevel,

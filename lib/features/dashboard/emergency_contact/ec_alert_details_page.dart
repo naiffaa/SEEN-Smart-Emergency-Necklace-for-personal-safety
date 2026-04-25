@@ -118,10 +118,21 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
     }
   }
 
+  String _mapsUrl(double lat, double lng) {
+    return 'https://www.google.com/maps/search/?api=1&query=$lat,$lng';
+  }
+
+  String _coordinatesText(double? lat, double? lng, dynamic lang) {
+    if (lat == null || lng == null || lat == 0 || lng == 0) {
+      return lang.text(en: "Not available", ar: "غير متوفر");
+    }
+    return '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}';
+  }
+
   Future<void> _openLiveLocation(double? lat, double? lng) async {
     final lang = appLanguage;
 
-    if (lat == null || lng == null) {
+    if (lat == null || lng == null || lat == 0 || lng == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -135,9 +146,7 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
       return;
     }
 
-    final Uri uri = Uri.parse(
-      'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
-    );
+    final Uri uri = Uri.parse(_mapsUrl(lat, lng));
 
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -282,16 +291,12 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
         }
 
         final latestAlert =
-            (alertSnapshot.data?.data() as Map<String, dynamic>?) ?? widget.alert;
+            (alertSnapshot.data?.data() as Map<String, dynamic>?) ??
+                widget.alert;
 
         final String userName =
             (latestAlert["userName"] ??
                     lang.text(en: "Unknown User", ar: "مستخدم غير معروف"))
-                .toString();
-
-        final String location =
-            (latestAlert["location"] ??
-                    lang.text(en: "Unknown Location", ar: "موقع غير معروف"))
                 .toString();
 
         final String status =
@@ -305,7 +310,8 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
             ? (latestAlert["lng"] as num).toDouble()
             : null;
 
-        final bool gpsFix = latestAlert["gpsFix"] == true;
+        final bool hasLocation = lat != null && lng != null && lat != 0 && lng != 0;
+        final bool gpsFix = latestAlert["gpsFix"] == true || hasLocation;
 
         final Timestamp? timestamp = latestAlert["triggeredAt"] as Timestamp?;
         final DateTime? dateTime = timestamp?.toDate();
@@ -330,7 +336,8 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                   .snapshots(),
               builder: (context, liveSnapshot) {
                 Map<String, dynamic>? liveData;
-                if (liveSnapshot.hasData && liveSnapshot.data!.docs.isNotEmpty) {
+                if (liveSnapshot.hasData &&
+                    liveSnapshot.data!.docs.isNotEmpty) {
                   liveData = liveSnapshot.data!.docs.first.data()
                       as Map<String, dynamic>;
                 }
@@ -411,9 +418,21 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                           ),
                           child: Column(
                             children: [
-                              _info(lang.text(en: "User", ar: "المستخدم"), userName),
-                              _info(lang.text(en: "Location", ar: "الموقع"), location),
-                              _info(lang.text(en: "Time", ar: "الوقت"), formattedTime),
+                              _info(
+                                lang.text(en: "User", ar: "المستخدم"),
+                                userName,
+                              ),
+                              _infoAction(
+                                title: lang.text(en: "Location", ar: "الموقع"),
+                                value: _coordinatesText(lat, lng, lang),
+                                icon: Icons.location_on_rounded,
+                                enabled: hasLocation,
+                                onTap: () => _openLiveLocation(lat, lng),
+                              ),
+                              _info(
+                                lang.text(en: "Time", ar: "الوقت"),
+                                formattedTime,
+                              ),
                               _info(
                                 lang.text(en: "GPS", ar: "نظام GPS"),
                                 gpsFix
@@ -421,7 +440,10 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                                     : lang.text(en: "Not fixed", ar: "غير مثبت"),
                               ),
                               if (phone.isNotEmpty)
-                                _info(lang.text(en: "Phone", ar: "الهاتف"), phone),
+                                _info(
+                                  lang.text(en: "Phone", ar: "الهاتف"),
+                                  phone,
+                                ),
                             ],
                           ),
                         ),
@@ -445,7 +467,10 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                lang.text(en: "Live Stream", ar: "البث المباشر"),
+                                lang.text(
+                                  en: "Live Stream",
+                                  ar: "البث المباشر",
+                                ),
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
                                 ),
@@ -460,8 +485,10 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                                 streamUrl.isNotEmpty
                                     ? streamUrl
                                     : lang.text(
-                                        en: "No live stream link available yet.",
-                                        ar: "لا يوجد رابط بث مباشر متاح حتى الآن.",
+                                        en:
+                                            "No live stream link available yet.",
+                                        ar:
+                                            "لا يوجد رابط بث مباشر متاح حتى الآن.",
                                       ),
                                 style: const TextStyle(
                                   color: AppColors.textSecondary,
@@ -541,7 +568,10 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
                             onTap: () => _updateStatus("Resolved"),
                           ),
                         _actionButton(
-                          label: lang.text(en: "Call User", ar: "الاتصال بالمستخدم"),
+                          label: lang.text(
+                            en: "Call User",
+                            ar: "الاتصال بالمستخدم",
+                          ),
                           color: AppColors.emergencyRed,
                           onTap: () => _callUser(phone),
                         ),
@@ -590,6 +620,64 @@ class _ECAlertDetailsPageState extends State<ECAlertDetailsPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _infoAction({
+    required String title,
+    required String value,
+    required IconData icon,
+    required VoidCallback onTap,
+    bool enabled = true,
+  }) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+            Expanded(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Flexible(
+                    child: Text(
+                      value,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: enabled
+                            ? AppColors.primary
+                            : AppColors.textSecondary,
+                        decoration:
+                            enabled ? TextDecoration.underline : null,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    icon,
+                    size: 18,
+                    color: enabled
+                        ? AppColors.primary
+                        : AppColors.textSecondary,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
