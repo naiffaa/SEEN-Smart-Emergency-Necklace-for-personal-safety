@@ -298,7 +298,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
-          value: selectedGender,
+          initialValue: selectedGender,
           items: [
             DropdownMenuItem(
               value: 'Female',

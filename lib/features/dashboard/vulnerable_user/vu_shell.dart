@@ -32,6 +32,7 @@ class _VUShellState extends State<VUShell> {
 
   @override
   void dispose() {
+    BleSyncService.instance.stop();
     super.dispose();
   }
 

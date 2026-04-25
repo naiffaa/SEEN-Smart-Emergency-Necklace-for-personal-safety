@@ -329,7 +329,7 @@ class _AdminUserDetailsPageState extends State<AdminUserDetailsPage> {
             _infoCard([
               SwitchListTile(
                 value: isActive,
-                activeColor: AppColors.primary,
+                activeThumbColor: AppColors.primary,
                 title: Text(
                   lang.text(
                     en: "Account Active",

@@ -76,8 +76,8 @@ class ECAlertsPage extends StatelessWidget {
             final aData = a.data() as Map<String, dynamic>;
             final bData = b.data() as Map<String, dynamic>;
 
-            final aTime = aData['triggeredAt'];
-            final bTime = bData['triggeredAt'];
+            final aTime = aData['triggeredAt'] ?? aData['createdAt'];
+            final bTime = bData['triggeredAt'] ?? bData['createdAt'];
 
             if (aTime is Timestamp && bTime is Timestamp) {
               return bTime.compareTo(aTime);
@@ -85,14 +85,34 @@ class ECAlertsPage extends StatelessWidget {
             return 0;
           });
 
+          final now = DateTime.now();
+
           final activeAlerts = sortedDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
-            return (data['status'] ?? '') == 'Triggered';
+            final status = (data['status'] ?? '').toString();
+
+            final expiresAtRaw = data['expiresAt'];
+            DateTime? expiresAt;
+            if (expiresAtRaw is Timestamp) {
+              expiresAt = expiresAtRaw.toDate();
+            }
+
+            final notExpired = expiresAt == null || expiresAt.isAfter(now);
+            return status == 'Triggered' && notExpired;
           }).toList();
 
           final historyAlerts = sortedDocs.where((doc) {
             final data = doc.data() as Map<String, dynamic>;
-            return (data['status'] ?? '') != 'Triggered';
+            final status = (data['status'] ?? '').toString();
+
+            final expiresAtRaw = data['expiresAt'];
+            DateTime? expiresAt;
+            if (expiresAtRaw is Timestamp) {
+              expiresAt = expiresAtRaw.toDate();
+            }
+
+            final expired = expiresAt != null && expiresAt.isBefore(now);
+            return status != 'Triggered' || expired;
           }).toList();
 
           return SingleChildScrollView(
@@ -154,8 +174,17 @@ class ECAlertsPage extends StatelessWidget {
         .toString();
 
     final String status = (alert['status'] ?? 'Triggered').toString();
+    final String streamStatus =
+        (alert['streamStatus'] ?? 'unavailable').toString();
 
-    final timestamp = alert['triggeredAt'];
+    final bool audioEnabled = alert['audioEnabled'] == true;
+
+    final String streamUrl = (alert['streamUrl'] ?? '').toString().trim();
+
+    final bool hasStream = streamUrl.isNotEmpty &&
+        (streamStatus == 'ready' || streamStatus == 'live');
+
+    final timestamp = alert['triggeredAt'] ?? alert['createdAt'];
     DateTime? dateTime;
     if (timestamp is Timestamp) {
       dateTime = timestamp.toDate();
@@ -166,6 +195,8 @@ class ECAlertsPage extends StatelessWidget {
         : lang.text(en: 'Unknown Time', ar: 'وقت غير معروف');
 
     final bool isAlert = status == "Triggered";
+
+    final battery = alert['battery'];
 
     return GestureDetector(
       onTap: () {
@@ -194,64 +225,157 @@ class ECAlertsPage extends StatelessWidget {
             ),
           ],
         ),
-        child: Row(
+        child: Column(
           children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: isAlert ? AppColors.dangerSoft : AppColors.surfaceSoft,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isAlert ? Icons.warning_amber_rounded : Icons.history,
-                color:
-                    isAlert ? AppColors.emergencyRed : AppColors.textPrimary,
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    userName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textPrimary,
-                    ),
+            Row(
+              children: [
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color:
+                        isAlert ? AppColors.dangerSoft : AppColors.surfaceSoft,
+                    shape: BoxShape.circle,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    "$location • $formattedTime",
-                    style: const TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 13,
-                    ),
+                  child: Icon(
+                    isAlert ? Icons.warning_amber_rounded : Icons.history,
+                    color: isAlert
+                        ? AppColors.emergencyRed
+                        : AppColors.textPrimary,
                   ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 5,
-              ),
-              decoration: BoxDecoration(
-                color: _statusBg(status),
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Text(
-                _localizedStatus(status, lang),
-                style: TextStyle(
-                  color: _statusColor(status),
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12,
                 ),
-              ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        userName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        "$location • $formattedTime",
+                        style: const TextStyle(
+                          color: AppColors.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      if (battery != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          "${lang.text(en: "Battery", ar: "البطارية")}: $battery%",
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _statusBg(status),
+                    borderRadius: BorderRadius.circular(30),
+                  ),
+                  child: Text(
+                    _localizedStatus(status, lang),
+                    style: TextStyle(
+                      color: _statusColor(status),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Flexible(
+                  child: _miniPill(
+                    icon: hasStream
+                        ? Icons.videocam_rounded
+                        : Icons.videocam_off_rounded,
+                    text: hasStream
+                        ? lang.text(
+                            en: "Live video ready",
+                            ar: "الفيديو المباشر جاهز",
+                          )
+                        : lang.text(
+                            en: "No live video",
+                            ar: "لا يوجد فيديو مباشر",
+                          ),
+                    bg: hasStream
+                        ? AppColors.successSoft
+                        : AppColors.surfaceSoft,
+                    fg: hasStream
+                        ? AppColors.success
+                        : AppColors.textSecondary,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: _miniPill(
+                    icon: audioEnabled
+                        ? Icons.mic_rounded
+                        : Icons.mic_off_rounded,
+                    text: audioEnabled
+                        ? lang.text(en: "Audio on", ar: "الصوت مفعّل")
+                        : lang.text(en: "No audio", ar: "لا يوجد صوت"),
+                    bg: audioEnabled
+                        ? AppColors.successSoft
+                        : AppColors.surfaceSoft,
+                    fg: audioEnabled
+                        ? AppColors.success
+                        : AppColors.textSecondary,
+                  ),
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _miniPill({
+    required IconData icon,
+    required String text,
+    required Color bg,
+    required Color fg,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(30),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: fg),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: fg,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

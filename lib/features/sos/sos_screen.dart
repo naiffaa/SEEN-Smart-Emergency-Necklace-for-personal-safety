@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../core/theme/colors.dart';
 import '../../main.dart';
+import '../devices/services/ble_sync_service.dart';
 import '../devices/services/seen_ble_service.dart';
 
 class SosScreen extends StatefulWidget {
@@ -50,6 +51,7 @@ class _SosScreenState extends State<SosScreen> {
   Future<void> _fanOutIncidentToEmergencyContacts({
     required String vulnerableUserId,
     required String vulnerableUserName,
+    required String vulnerableUserPhone,
     required String alertId,
     required String locationText,
     required List<String> emergencyContactIds,
@@ -64,8 +66,13 @@ class _SosScreenState extends State<SosScreen> {
           .doc(vulnerableUserId)
           .set({
         'name': vulnerableUserName,
+        'phone': vulnerableUserPhone,
         'status': 'Alert',
         'lastUpdate': nowText,
+        'location': locationText,
+        'streamUrl': '',
+        'streamStatus': 'unavailable',
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
       await FirebaseFirestore.instance
@@ -78,8 +85,14 @@ class _SosScreenState extends State<SosScreen> {
         'status': 'Triggered',
         'location': locationText,
         'vulnerableId': vulnerableUserId,
+        'vulnerableUserId': vulnerableUserId,
         'userName': vulnerableUserName,
+        'userPhone': vulnerableUserPhone,
+        'streamUrl': '',
+        'streamStatus': 'unavailable',
+        'audioEnabled': false,
         'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
     }
   }
@@ -87,19 +100,25 @@ class _SosScreenState extends State<SosScreen> {
   Future<void> _createAppAlert(User user) async {
     final userDoc =
         await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+
     final userData = userDoc.data() ?? {};
 
-    final String userName = (userData['name'] ??
+    final userName = (userData['name'] ??
             user.displayName ??
             appLanguage.text(en: 'Unknown User', ar: 'مستخدم غير معروف'))
         .toString();
 
+    final userPhone = (userData['phone'] ?? user.phoneNumber ?? '').toString();
+
     final contactIds = await _loadEmergencyContactIds(user.uid);
+    final expiresAt = DateTime.now().add(const Duration(seconds: 60));
 
     final alertRef = await FirebaseFirestore.instance.collection('alerts').add({
       'vulnerableId': user.uid,
+      'vulnerableUserId': user.uid,
       'userId': user.uid,
       'userName': userName,
+      'userPhone': userPhone,
       'deviceId': null,
       'source': 'app',
       'status': 'Triggered',
@@ -108,12 +127,45 @@ class _SosScreenState extends State<SosScreen> {
       'lng': null,
       'gpsFix': false,
       'triggeredAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'expiresAt': Timestamp.fromDate(expiresAt),
+      'durationSeconds': 60,
       'emergencyContactIds': contactIds,
+      'streamStatus': 'unavailable',
+      'streamUrl': '',
+      'audioEnabled': false,
+      'battery': null,
+      'batteryVoltage': null,
+      'micLevel': null,
     });
+
+    await FirebaseFirestore.instance.collection('live_sessions').add({
+      'alertId': alertRef.id,
+      'userId': user.uid,
+      'vulnerableId': user.uid,
+      'streamUrl': '',
+      'streamStatus': 'unavailable',
+      'lat': null,
+      'lng': null,
+      'gpsFix': false,
+      'audioEnabled': false,
+      'isLive': false,
+      'startedAt': FieldValue.serverTimestamp(),
+      'expiresAt': Timestamp.fromDate(expiresAt),
+      'durationSeconds': 60,
+    });
+
+    await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+      'status': 'Alert',
+      'lastAlertId': alertRef.id,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
 
     await _fanOutIncidentToEmergencyContacts(
       vulnerableUserId: user.uid,
       vulnerableUserName: userName,
+      vulnerableUserPhone: userPhone,
       alertId: alertRef.id,
       locationText: 'Unknown Location',
       emergencyContactIds: contactIds,
@@ -129,30 +181,50 @@ class _SosScreenState extends State<SosScreen> {
       final user = FirebaseAuth.instance.currentUser;
 
       if (user == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("You are not logged in.")),
-          );
-        }
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("You are not logged in.")),
+        );
         return;
       }
+
+      BleSyncService.instance.start();
 
       final ble = SeenBleService.instance;
 
       if (ble.isConnected) {
-        await ble.sendCommand("ARM");
-        await ble.sendCommand("GET_GPS");
+        await ble.getBattery();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.getGps();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.getMic();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.arm();
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("SOS sent to device via BLE")),
+          SnackBar(
+            content: Text(
+              appLanguage.text(
+                en: "SOS sent to SEEN device. Waiting for live stream and GPS...",
+                ar: "تم إرسال SOS إلى جهاز SEEN. بانتظار البث والموقع...",
+              ),
+            ),
+          ),
         );
       } else {
         await _createAppAlert(user);
 
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("SOS sent from app 🚨")),
+          SnackBar(
+            content: Text(
+              appLanguage.text(
+                en: "SOS sent from app.",
+                ar: "تم إرسال SOS من التطبيق.",
+              ),
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -229,10 +301,10 @@ class _SosScreenState extends State<SosScreen> {
                                   color: AppColors.emergencyRed,
                                 ),
                               )
-                            : const Column(
+                            : Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text(
+                                  const Text(
                                     'SOS',
                                     style: TextStyle(
                                       fontSize: 40,
@@ -241,10 +313,13 @@ class _SosScreenState extends State<SosScreen> {
                                       letterSpacing: 1,
                                     ),
                                   ),
-                                  SizedBox(height: 4),
+                                  const SizedBox(height: 4),
                                   Text(
-                                    'Tap to send',
-                                    style: TextStyle(
+                                    lang.text(
+                                      en: 'Tap to send',
+                                      ar: 'اضغط للإرسال',
+                                    ),
+                                    style: const TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
                                       color: AppColors.emergencyRed,
@@ -278,12 +353,12 @@ class _SosScreenState extends State<SosScreen> {
               Text(
                 _isSending
                     ? lang.text(
-                        en: "Your emergency alert is being sent to the system.",
-                        ar: "يتم الآن إرسال تنبيه الطوارئ إلى النظام.",
+                        en: "The app will trigger the SEEN device if connected, otherwise it will send an app alert.",
+                        ar: "سيشغل التطبيق جهاز SEEN إذا كان متصلًا، وإلا سيرسل تنبيهًا من التطبيق.",
                       )
                     : lang.text(
-                        en: "Tap the SOS button to instantly send an emergency alert.",
-                        ar: "اضغط زر SOS لإرسال تنبيه طوارئ فورًا.",
+                        en: "Tap SOS to trigger emergency alert, live location, and camera/audio stream when the device is connected.",
+                        ar: "اضغط SOS لتفعيل تنبيه الطوارئ والموقع المباشر وبث الكاميرا والصوت عند اتصال الجهاز.",
                       ),
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyLarge?.copyWith(
@@ -314,8 +389,8 @@ class _SosScreenState extends State<SosScreen> {
                     Expanded(
                       child: Text(
                         lang.text(
-                          en: "Use this only in emergencies. Your alert will be marked as active immediately.",
-                          ar: "استخدم هذا فقط في حالات الطوارئ. سيتم تفعيل التنبيه فورًا.",
+                          en: "Use this only in emergencies. Your emergency contacts will be notified immediately.",
+                          ar: "استخدم هذا فقط في حالات الطوارئ. سيتم إخطار جهات اتصال الطوارئ فورًا.",
                         ),
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: Colors.white.withOpacity(0.9),

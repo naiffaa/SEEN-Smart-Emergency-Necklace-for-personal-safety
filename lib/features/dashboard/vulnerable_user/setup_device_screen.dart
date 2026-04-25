@@ -4,6 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../../core/theme/colors.dart';
 import '../../../main.dart';
+import '../../devices/services/ble_sync_service.dart';
+import '../../devices/services/seen_ble_service.dart';
 
 class SetupDeviceScreen extends StatefulWidget {
   final String deviceId;
@@ -18,7 +20,14 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
   final TextEditingController nameController = TextEditingController();
 
   String? selectedContactId;
+  Map<String, dynamic>? selectedContactData;
   bool isSaving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    BleSyncService.instance.start();
+  }
 
   @override
   void dispose() {
@@ -32,7 +41,9 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
 
     if (user == null) return;
 
-    if (nameController.text.trim().isEmpty || selectedContactId == null) {
+    final deviceName = nameController.text.trim();
+
+    if (deviceName.isEmpty || selectedContactId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -49,20 +60,67 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
     setState(() => isSaving = true);
 
     try {
+      final contactData = selectedContactData ?? {};
+
+      final contactUserId = (contactData['contactUserId'] ??
+              contactData['uid'] ??
+              contactData['userId'] ??
+              contactData['contactId'] ??
+              selectedContactId)
+          .toString();
+
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('devices')
           .doc(widget.deviceId)
           .set({
-        'name': nameController.text.trim(),
+        'name': deviceName,
+        'deviceId': widget.deviceId,
         'contactId': selectedContactId,
+        'contactUserId': contactUserId,
+        'contactName': contactData['name'],
         'isSetupComplete': true,
         'isPaired': true,
         'status': 'Connected',
+        'connectionStatus': 'Paired',
+        'source': 'ble',
         'updatedAt': FieldValue.serverTimestamp(),
         'setupCompletedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'pairedDeviceId': widget.deviceId,
+        'pairedDeviceName': deviceName,
+        'pairedVia': 'ble',
+        'bleConnected': SeenBleService.instance.isConnected,
+        'bleDeviceId': widget.deviceId,
+        'status': 'Safe',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('contacts')
+          .doc(selectedContactId)
+          .set({
+        'contactUserId': contactUserId,
+        'linkedDeviceId': widget.deviceId,
+        'linkedDeviceName': deviceName,
+        'isLinkedToDevice': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      final ble = SeenBleService.instance;
+      if (ble.isConnected) {
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.getBattery();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.getGps();
+        await Future.delayed(const Duration(milliseconds: 200));
+        await ble.getMic();
+      }
 
       if (!mounted) return;
 
@@ -104,6 +162,20 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
     final theme = Theme.of(context);
     final lang = appLanguage;
     final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: Center(
+          child: Text(
+            lang.text(
+              en: "No user logged in.",
+              ar: "لا يوجد مستخدم مسجل الدخول.",
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -177,7 +249,6 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                     ),
                   ),
                   const SizedBox(height: 28),
-
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -200,13 +271,11 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 20),
-
                   StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('users')
-                        .doc(user!.uid)
+                        .doc(user.uid)
                         .collection('contacts')
                         .snapshots(),
                     builder: (context, snapshot) {
@@ -218,6 +287,26 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                       }
 
                       final contacts = snapshot.data!.docs;
+
+                      if (contacts.isEmpty) {
+                        return Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceSoft,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Text(
+                            lang.text(
+                              en: "No emergency contacts found. Please add a contact first.",
+                              ar: "لا توجد جهات اتصال طوارئ. الرجاء إضافة جهة اتصال أولاً.",
+                            ),
+                            style: const TextStyle(
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        );
+                      }
 
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -234,7 +323,7 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                           ),
                           const SizedBox(height: 8),
                           DropdownButtonFormField<String>(
-                            value: selectedContactId,
+                            initialValue: selectedContactId,
                             hint: Text(
                               lang.text(
                                 en: "Select emergency contact",
@@ -245,19 +334,28 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                               final data = doc.data() as Map<String, dynamic>;
                               return DropdownMenuItem<String>(
                                 value: doc.id,
-                                child: Text(data['name'] ?? 'No name'),
+                                child: Text(
+                                  (data['name'] ??
+                                          data['fullName'] ??
+                                          data['email'] ??
+                                          'No name')
+                                      .toString(),
+                                ),
                               );
                             }).toList(),
                             onChanged: (value) {
+                              final contactDoc = contacts.firstWhere(
+                                (doc) => doc.id == value,
+                              );
+
                               setState(() {
                                 selectedContactId = value;
+                                selectedContactData =
+                                    contactDoc.data() as Map<String, dynamic>;
                               });
                             },
                             decoration: InputDecoration(
-                              hintText: lang.text(
-                                en: "Select",
-                                ar: "اختر",
-                              ),
+                              hintText: lang.text(en: "Select", ar: "اختر"),
                             ),
                             dropdownColor: AppColors.surface,
                             borderRadius: BorderRadius.circular(18),
@@ -270,9 +368,7 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                       );
                     },
                   ),
-
                   const SizedBox(height: 26),
-
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -297,9 +393,7 @@ class _SetupDeviceScreenState extends State<SetupDeviceScreen> {
                 ],
               ),
             ),
-
             const SizedBox(height: 18),
-
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(18),

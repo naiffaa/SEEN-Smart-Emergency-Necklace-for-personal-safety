@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/colors.dart';
+import 'services/ble_sync_service.dart';
 import 'services/seen_ble_service.dart';
 
 class DeviceSetupScreen extends StatefulWidget {
@@ -22,6 +23,7 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   void initState() {
     super.initState();
     controller = TextEditingController(text: widget.deviceName);
+    BleSyncService.instance.start();
   }
 
   @override
@@ -62,25 +64,42 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
     setState(() => _isSaving = true);
 
     try {
+      final deviceId = device.remoteId.str;
+      final bleName =
+          device.platformName.isNotEmpty ? device.platformName : widget.deviceName;
+
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.uid)
           .collection('devices')
-          .doc(device.remoteId.str)
+          .doc(deviceId)
           .set({
         'name': label,
-        'deviceId': device.remoteId.str,
-        'bleName': device.platformName.isNotEmpty
-            ? device.platformName
-            : widget.deviceName,
+        'deviceId': deviceId,
+        'bleName': bleName,
         'status': 'Connected',
-        'battery': 0,
-        'location': 'Unknown',
+        'connectionStatus': 'Paired',
         'isPaired': true,
         'source': 'ble',
         'updatedAt': FieldValue.serverTimestamp(),
         'lastSeenAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'pairedDeviceId': deviceId,
+        'pairedDeviceName': label,
+        'pairedVia': 'ble',
+        'bleConnected': true,
+        'bleDeviceId': deviceId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      await Future.delayed(const Duration(milliseconds: 200));
+      await ble.getBattery();
+      await Future.delayed(const Duration(milliseconds: 200));
+      await ble.getGps();
+      await Future.delayed(const Duration(milliseconds: 200));
+      await ble.getMic();
 
       if (!mounted) return;
       Navigator.pop(context, label);
@@ -100,6 +119,7 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final connectedId = SeenBleService.instance.connectedDeviceId;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -151,13 +171,13 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                       width: 84,
                       height: 84,
                       decoration: BoxDecoration(
-                        color: AppColors.surfaceSoft,
+                        color: AppColors.successSoft,
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: const Icon(
                         Icons.bluetooth_connected_rounded,
                         size: 38,
-                        color: AppColors.textPrimary,
+                        color: AppColors.success,
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -177,6 +197,16 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    if (connectedId != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        connectedId,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     Text(
                       "Give this device a custom label so you can identify it later.",
@@ -217,7 +247,8 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton(
-                        onPressed: _isSaving ? null : () => Navigator.pop(context),
+                        onPressed:
+                            _isSaving ? null : () => Navigator.pop(context),
                         child: const Text("Cancel"),
                       ),
                     ),
@@ -252,7 +283,7 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        "This label is only for display inside the app. It helps you identify your paired device more easily.",
+                        "After saving, the app will request battery, GPS, and microphone status from the SEEN device.",
                         style: theme.textTheme.bodyMedium?.copyWith(
                           color: AppColors.textSecondary,
                         ),

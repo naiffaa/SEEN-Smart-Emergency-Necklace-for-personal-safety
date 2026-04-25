@@ -32,11 +32,16 @@ class SeenBleService {
 
   bool _isScanning = false;
   bool _isConnecting = false;
+  bool _autoReconnect = true;
+
+  String? _lastDeviceId;
 
   List<ScanResult> _latestResults = [];
+  final StringBuffer _notifyBuffer = StringBuffer();
 
   Stream<List<ScanResult>> get scanResultsStream =>
       _scanResultsController.stream;
+
   Stream<SeenBleMessage> get messageStream => _messageController.stream;
 
   BluetoothDevice? get connectedDevice => _device;
@@ -49,7 +54,7 @@ class SeenBleService {
   bool get isScanning => _isScanning;
   bool get isConnecting => _isConnecting;
 
-  String? get connectedDeviceId => _device?.remoteId.str;
+  String? get connectedDeviceId => _device?.remoteId.str ?? _lastDeviceId;
 
   bool isConnectedTo(String deviceId) {
     return isConnected && _device?.remoteId.str == deviceId;
@@ -93,6 +98,7 @@ class SeenBleService {
     _scanSubscription = FlutterBluePlus.scanResults.listen(
       (results) {
         final deduped = <String, ScanResult>{};
+
         for (final result in results) {
           deduped[result.device.remoteId.str] = result;
         }
@@ -106,32 +112,35 @@ class SeenBleService {
 
         _latestResults = devices;
         _scanResultsController.add(_latestResults);
+
+        debugPrint("SEEN BLE scan results: ${devices.length}");
       },
       onError: (e) {
+        debugPrint("SEEN BLE scan error: $e");
         _scanResultsController.addError(e);
       },
     );
 
     try {
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 10),
-      );
+      debugPrint("SEEN BLE start scan");
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
       await FlutterBluePlus.isScanning.where((v) => v == false).first;
     } finally {
       _isScanning = false;
       await FlutterBluePlus.stopScan();
+      debugPrint("SEEN BLE scan stopped");
     }
   }
 
   Future<ScanResult?> findDeviceById(
     String deviceId, {
-    Duration timeout = const Duration(seconds: 8),
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     await ensurePermissions();
 
     final completer = Completer<ScanResult?>();
-
     StreamSubscription<List<ScanResult>>? tempSub;
+
     tempSub = FlutterBluePlus.scanResults.listen((results) {
       for (final result in results) {
         if (result.device.remoteId.str == deviceId) {
@@ -148,12 +157,10 @@ class SeenBleService {
       await _ensureBluetoothOn();
       await FlutterBluePlus.startScan(timeout: timeout);
 
-      final result = await completer.future.timeout(
+      return await completer.future.timeout(
         timeout,
         onTimeout: () => null,
       );
-
-      return result;
     } finally {
       await FlutterBluePlus.stopScan();
       await tempSub.cancel();
@@ -162,8 +169,10 @@ class SeenBleService {
 
   Future<void> reconnectToSavedDevice(String deviceId) async {
     if (_isConnecting) return;
-
     if (isConnectedTo(deviceId)) return;
+
+    _lastDeviceId = deviceId;
+    debugPrint("SEEN BLE reconnecting to saved device: $deviceId");
 
     final found = await findDeviceById(deviceId);
     if (found == null) {
@@ -171,6 +180,19 @@ class SeenBleService {
     }
 
     await connect(found.device);
+  }
+
+  Future<void> _tryAutoReconnect() async {
+    if (!_autoReconnect) return;
+    if (_lastDeviceId == null || _lastDeviceId!.isEmpty) return;
+    if (_isConnecting || isConnected) return;
+
+    try {
+      debugPrint("SEEN BLE auto reconnect trying...");
+      await reconnectToSavedDevice(_lastDeviceId!);
+    } catch (e) {
+      debugPrint("SEEN BLE auto reconnect failed: $e");
+    }
   }
 
   Future<void> _ensureBluetoothOn() async {
@@ -214,8 +236,8 @@ class SeenBleService {
 
   Future<void> connect(BluetoothDevice device) async {
     if (_isConnecting) return;
-
     _isConnecting = true;
+    _autoReconnect = true;
 
     try {
       await stopScan();
@@ -229,23 +251,42 @@ class SeenBleService {
         } catch (_) {}
       }
 
+      debugPrint("SEEN BLE connecting to ${device.remoteId.str}");
+
       try {
-        await device.connect(timeout: const Duration(seconds: 12));
-      } catch (_) {}
+        await device.connect(
+          timeout: const Duration(seconds: 12),
+          autoConnect: false,
+        );
+      } catch (e) {
+        debugPrint("SEEN BLE connect note: $e");
+      }
 
       _device = device;
+      _lastDeviceId = device.remoteId.str;
 
       _connectionStateSubscription =
           device.connectionState.listen((state) async {
+        debugPrint("SEEN BLE connection state: $state");
+
         if (state == BluetoothConnectionState.disconnected) {
-          await _clearConnectionState();
+          await _clearConnectionState(keepLastDevice: true);
+          Future.delayed(const Duration(seconds: 2), _tryAutoReconnect);
         }
       });
 
       await _discoverCharacteristics(device);
       await _subscribeToNotifications();
 
-      await sendCommand("PING");
+      await ping();
+      await Future.delayed(const Duration(milliseconds: 250));
+      await getBattery();
+      await Future.delayed(const Duration(milliseconds: 250));
+      await getGps();
+      await Future.delayed(const Duration(milliseconds: 250));
+      await getMic();
+
+      debugPrint("SEEN BLE connected successfully");
     } finally {
       _isConnecting = false;
     }
@@ -274,6 +315,8 @@ class SeenBleService {
     if (_commandCharacteristic == null || _statusCharacteristic == null) {
       throw Exception("SEEN BLE service not found on the connected device");
     }
+
+    debugPrint("SEEN BLE characteristics discovered");
   }
 
   Future<void> _subscribeToNotifications() async {
@@ -286,27 +329,73 @@ class SeenBleService {
     final characteristic = _statusCharacteristic!;
     await characteristic.setNotifyValue(true);
 
-    _notifySubscription = characteristic.lastValueStream.listen((value) {
-      if (value.isEmpty) return;
+    _notifySubscription = characteristic.lastValueStream.listen(
+      (value) {
+        if (value.isEmpty) return;
 
-      final raw = utf8.decode(value, allowMalformed: true).trim();
-      if (raw.isEmpty) return;
+        final chunk = utf8.decode(value, allowMalformed: true);
+        if (chunk.trim().isEmpty) return;
 
-      try {
-        final decoded = jsonDecode(raw);
-        if (decoded is Map<String, dynamic>) {
-          _messageController.add(SeenBleMessage.fromJson(decoded));
-          return;
+        debugPrint("SEEN BLE chunk: $chunk");
+
+        _notifyBuffer.write(chunk);
+
+        final current = _notifyBuffer.toString();
+        if (!current.contains('\n')) return;
+
+        final messages = current.split('\n');
+        _notifyBuffer.clear();
+
+        if (messages.isNotEmpty && messages.last.trim().isNotEmpty) {
+          _notifyBuffer.write(messages.last);
         }
-      } catch (_) {}
 
-      _messageController.add(
-        SeenBleMessage(
-          type: 'raw',
-          value: raw,
-        ),
-      );
-    });
+        for (int i = 0; i < messages.length - 1; i++) {
+          final raw = messages[i].trim();
+          if (raw.isEmpty) continue;
+
+          final parsed = _parseIncomingMessage(raw);
+          debugPrint("SEEN BLE parsed: $parsed");
+          _messageController.add(parsed);
+        }
+      },
+      onError: (e) {
+        debugPrint("SEEN BLE notification error: $e");
+      },
+    );
+  }
+
+  SeenBleMessage _parseIncomingMessage(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return SeenBleMessage.fromJson(decoded);
+      }
+    } catch (_) {}
+
+    if (raw.contains('|')) {
+      return SeenBleMessage.fromRaw(raw);
+    }
+
+    final lowered = raw.trim().toLowerCase();
+
+    if (lowered == 'ready') {
+      return SeenBleMessage(type: 'ready', value: raw, raw: raw);
+    }
+
+    if (lowered == 'pong') {
+      return SeenBleMessage(type: 'pong', value: raw, raw: raw);
+    }
+
+    if (lowered == 'armed') {
+      return SeenBleMessage(type: 'armed', value: raw, raw: raw);
+    }
+
+    if (lowered == 'disarmed') {
+      return SeenBleMessage(type: 'disarmed', value: raw, raw: raw);
+    }
+
+    return SeenBleMessage(type: 'raw', value: raw, raw: raw);
   }
 
   Future<void> sendCommand(String command) async {
@@ -314,13 +403,31 @@ class SeenBleService {
       throw Exception("No connected SEEN device");
     }
 
+    final cleanCommand = command.trim();
+    debugPrint("SEEN BLE send command: $cleanCommand");
+
     await _commandCharacteristic!.write(
-      utf8.encode(command),
+      utf8.encode("$cleanCommand\n"),
       withoutResponse: true,
     );
   }
 
+  Future<void> ping() => sendCommand("PING");
+
+  Future<void> getGps() => sendCommand("GET_GPS");
+
+  Future<void> getBattery() => sendCommand("GET_BAT");
+
+  Future<void> getMic() => sendCommand("GET_MIC");
+
+  Future<void> arm() => sendCommand("ARM");
+
+  Future<void> disarm() => sendCommand("DISARM");
+
   Future<void> disconnect() async {
+    debugPrint("SEEN BLE disconnect");
+    _autoReconnect = false;
+
     await _notifySubscription?.cancel();
     _notifySubscription = null;
 
@@ -333,18 +440,26 @@ class SeenBleService {
       } catch (_) {}
     }
 
-    await _clearConnectionState();
+    await _clearConnectionState(keepLastDevice: false);
   }
 
-  Future<void> _clearConnectionState() async {
+  Future<void> _clearConnectionState({bool keepLastDevice = true}) async {
     _commandCharacteristic = null;
     _statusCharacteristic = null;
     _device = null;
+    _notifyBuffer.clear();
+
+    if (!keepLastDevice) {
+      _lastDeviceId = null;
+    }
+
+    debugPrint("SEEN BLE connection cleared");
   }
 
   String _normalizeUuid(String input) => input.trim().toUpperCase();
 
   void dispose() {
+    _autoReconnect = false;
     _scanSubscription?.cancel();
     _notifySubscription?.cancel();
     _connectionStateSubscription?.cancel();

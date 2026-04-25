@@ -1,3 +1,5 @@
+// ignore_for_file: deprecated_member_use
+
 import 'package:flutter/material.dart';
 import '../devices/device_location_screen.dart';
 import '../../core/theme/colors.dart';

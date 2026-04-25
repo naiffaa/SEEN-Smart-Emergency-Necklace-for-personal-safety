@@ -7,6 +7,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../../core/theme/colors.dart';
 import 'device_setup_screen.dart';
+import 'services/ble_sync_service.dart';
 import 'services/seen_ble_service.dart';
 
 class PairDeviceScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class PairDeviceScreen extends StatefulWidget {
 
 class _PairDeviceScreenState extends State<PairDeviceScreen> {
   final SeenBleService _ble = SeenBleService.instance;
+  final TextEditingController _manualIdController = TextEditingController();
 
   List<ScanResult> _results = [];
   ScanResult? _selected;
@@ -31,9 +33,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
 
     _scanSub = _ble.scanResultsStream.listen((results) {
       if (!mounted) return;
-      setState(() {
-        _results = results;
-      });
+      setState(() => _results = results);
     });
 
     _startScan();
@@ -56,49 +56,109 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
         SnackBar(content: Text("Scan failed: $e")),
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _isScanning = false;
-        });
-      }
+      if (mounted) setState(() => _isScanning = false);
     }
   }
 
   Future<void> _connectSelectedDevice() async {
     if (_selected == null || _isConnecting) return;
+    await _connectAndSave(_selected!);
+  }
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  Future<void> _connectManualDevice() async {
+    if (_isConnecting) return;
+
+    final manualId = _manualIdController.text.trim();
+    if (manualId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please enter a device ID")),
+      );
+      return;
+    }
 
     setState(() => _isConnecting = true);
 
     try {
-      await _ble.connect(_selected!.device);
+      final found = await _ble.findDeviceById(manualId);
 
-      final deviceName = _displayName(_selected!);
+      if (found == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Device not found nearby")),
+        );
+        return;
+      }
 
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .collection('devices')
-          .doc(_selected!.device.remoteId.str)
-          .set({
+      await _connectAndSave(found, alreadyLoading: true);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Manual connection failed: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _isConnecting = false);
+    }
+  }
+
+  Future<void> _connectAndSave(
+    ScanResult result, {
+    bool alreadyLoading = false,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    if (!alreadyLoading) {
+      setState(() => _isConnecting = true);
+    }
+
+    try {
+      await _ble.connect(result.device);
+      BleSyncService.instance.start();
+
+      final deviceName = _displayName(result);
+      final deviceId = result.device.remoteId.str;
+
+      final deviceData = {
         'name': deviceName,
-        'deviceId': _selected!.device.remoteId.str,
+        'deviceId': deviceId,
         'bleName': deviceName,
         'status': 'Connected',
-        'battery': 0,
-        'location': 'Unknown',
+        'connectionStatus': 'Paired',
         'isPaired': true,
         'source': 'ble',
         'pairedAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'lastSeenAt': FieldValue.serverTimestamp(),
+      };
+
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(user.uid)
+          .collection('devices')
+          .doc(deviceId)
+          .set(deviceData, SetOptions(merge: true));
+
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
+        'pairedDeviceId': deviceId,
+        'pairedDeviceName': deviceName,
+        'pairedVia': 'ble',
+        'bleConnected': true,
+        'bleDeviceId': deviceId,
+        'status': 'Safe',
+        'pairedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      await Future.delayed(const Duration(milliseconds: 250));
+      await _ble.getBattery();
+      await Future.delayed(const Duration(milliseconds: 250));
+      await _ble.getGps();
+      await Future.delayed(const Duration(milliseconds: 250));
+      await _ble.getMic();
 
       if (!mounted) return;
 
-      final result = await Navigator.push(
+      final setupResult = await Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => DeviceSetupScreen(deviceName: deviceName),
@@ -106,14 +166,14 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       );
 
       if (!mounted) return;
-      Navigator.pop(context, result ?? true);
+      Navigator.pop(context, setupResult ?? true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Connection failed: $e")),
       );
     } finally {
-      if (mounted) {
+      if (mounted && !alreadyLoading) {
         setState(() => _isConnecting = false);
       }
     }
@@ -126,7 +186,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     if (platformName.isNotEmpty) return platformName;
     if (advName.isNotEmpty) return advName;
 
-    return "Unknown BLE Device";
+    return "SEEN Device";
   }
 
   bool _isLikelySeen(ScanResult result) {
@@ -144,10 +204,9 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
 
   String _subtitleText(ScanResult result) {
     final advName = result.advertisementData.advName.trim();
-    final hasAdvName = advName.isNotEmpty;
     final isLikelySeen = _isLikelySeen(result);
 
-    if (isLikelySeen && hasAdvName) {
+    if (isLikelySeen && advName.isNotEmpty) {
       return "${result.device.remoteId.str} • likely SEEN";
     }
 
@@ -155,16 +214,13 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       return "${result.device.remoteId.str} • matches service";
     }
 
-    if (hasAdvName) {
-      return result.device.remoteId.str;
-    }
-
-    return "${result.device.remoteId.str} • no name";
+    return "${result.device.remoteId.str} • ${advName.isEmpty ? "no name" : advName}";
   }
 
   @override
   void dispose() {
     _scanSub?.cancel();
+    _manualIdController.dispose();
     super.dispose();
   }
 
@@ -192,7 +248,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      "Pair Device",
+                      "Connect Device",
                       style: theme.textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -210,70 +266,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                 ],
               ),
               const SizedBox(height: 16),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: AppColors.border),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppColors.shadow,
-                      blurRadius: 14,
-                      offset: Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 84,
-                      height: 84,
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceSoft,
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: const Icon(
-                        Icons.bluetooth_searching_rounded,
-                        size: 40,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text(
-                      "Connect Your Wearable",
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      _isScanning
-                          ? "Scanning nearby Bluetooth devices..."
-                          : "Scan for nearby Bluetooth devices or enter the Device ID manually.",
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _isScanning ? null : _startScan,
-                        icon: const Icon(Icons.bluetooth),
-                        label: Text(
-                          _isScanning
-                              ? "Scanning..."
-                              : "Connect Bluetooth Devices",
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              _buildConnectHeader(theme),
               const SizedBox(height: 20),
               Text(
                 "Nearby Devices — tap to select",
@@ -294,7 +287,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                   child: Text(
                     _isScanning
                         ? "Searching..."
-                        : "No devices found. If your ESP appears as N/A in other apps, it may still show here as Unknown BLE Device.",
+                        : "No devices found. Make sure the SEEN ESP32-S3 is powered on.",
                     style: const TextStyle(color: AppColors.textSecondary),
                   ),
                 ),
@@ -321,9 +314,20 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const TextField(
-                decoration: InputDecoration(
+              TextField(
+                controller: _manualIdController,
+                decoration: const InputDecoration(
                   hintText: "Enter Device ID",
+                ),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _isConnecting ? null : _connectManualDevice,
+                  child: Text(
+                    _isConnecting ? "Connecting..." : "Connect by Device ID",
+                  ),
                 ),
               ),
               const SizedBox(height: 22),
@@ -343,6 +347,77 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     );
   }
 
+  Widget _buildConnectHeader(ThemeData theme) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.shadow,
+            blurRadius: 14,
+            offset: Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              color: AppColors.surfaceSoft,
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: const Icon(
+              Icons.bluetooth_searching_rounded,
+              size: 40,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            "Connect Your Wearable",
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _isScanning
+                ? "Scanning nearby Bluetooth devices..."
+                : "Scan for your SEEN device or connect manually using the Device ID.",
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _isScanning ? null : _startScan,
+              icon: _isScanning
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.bluetooth),
+              label: Text(
+                _isScanning ? "Scanning..." : "Scan Bluetooth Devices",
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDeviceTile(ScanResult result) {
     final name = _displayName(result);
     final subtitle = _subtitleText(result);
@@ -351,11 +426,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     final rssi = result.rssi;
 
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selected = result;
-        });
-      },
+      onTap: () => setState(() => _selected = result),
       child: Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(16),
@@ -382,11 +453,7 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
               value: result.device.remoteId.str,
               groupValue: _selected?.device.remoteId.str,
               activeColor: AppColors.primary,
-              onChanged: (_) {
-                setState(() {
-                  _selected = result;
-                });
-              },
+              onChanged: (_) => setState(() => _selected = result),
             ),
             const SizedBox(width: 4),
             Container(
@@ -402,9 +469,8 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
                 isLikelySeen
                     ? Icons.bluetooth_connected_rounded
                     : Icons.bluetooth_rounded,
-                color: isLikelySeen
-                    ? AppColors.success
-                    : AppColors.textPrimary,
+                color:
+                    isLikelySeen ? AppColors.success : AppColors.textPrimary,
                 size: 20,
               ),
             ),
