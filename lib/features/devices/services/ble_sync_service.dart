@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/seen_ble_message.dart';
-import 'evidence_recording_service.dart';
 import 'seen_ble_service.dart';
 
 class BleSyncService {
@@ -150,6 +151,10 @@ class BleSyncService {
     final sat = msg.sat ?? _lastGps?.sat ?? 0;
 
     final streamUrl = msg.streamUrl ?? "";
+    final espAudioUrl = _extractFieldFromRaw(msg.raw ?? msg.value, 'audioUrl') ??
+        _extractFieldFromRaw(msg.raw ?? msg.value, 'audio') ??
+        "";
+
     final battery = msg.battery ?? _lastBattery?.battery;
     final voltage = msg.voltage ?? _lastBattery?.voltage;
     final micLevel =
@@ -171,14 +176,13 @@ class BleSyncService {
     final alertRef = _db.collection('alerts').doc();
 
     final locationText = validGps
-        ? "${lat!.toStringAsFixed(5)}, ${lng!.toStringAsFixed(5)}"
+        ? "${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}"
         : "Waiting GPS...";
 
-    final recordingStarted =
-        await EvidenceRecordingService.instance.startAudioRecording(alertRef.id);
+    final audioStatus = espAudioUrl.isNotEmpty ? 'recording' : 'unavailable';
 
     debugPrint('BLE SYNC SOS STARTED alertId=${alertRef.id}');
-    debugPrint('AUDIO RECORDING STARTED: $recordingStarted');
+    debugPrint('ESP AUDIO URL: $espAudioUrl');
 
     await alertRef.set({
       'alertId': alertRef.id,
@@ -199,8 +203,10 @@ class BleSyncService {
       'expiresAt': Timestamp.fromDate(expiresAt),
       'streamUrl': streamUrl,
       'streamStatus': streamUrl.isNotEmpty ? 'ready' : 'starting',
-      'audioEnabled': true,
-      'audioRecordingStatus': recordingStarted ? 'recording' : 'failed',
+      'espAudioUrl': espAudioUrl,
+      'audioEnabled': espAudioUrl.isNotEmpty,
+      'audioSource': 'necklace',
+      'audioRecordingStatus': audioStatus,
       'battery': battery,
       'batteryVoltage': voltage,
       'micLevel': micLevel,
@@ -215,12 +221,14 @@ class BleSyncService {
       'vulnerableId': uid,
       'streamUrl': streamUrl,
       'streamStatus': streamUrl.isNotEmpty ? 'live' : 'starting',
+      'espAudioUrl': espAudioUrl,
       'lat': validGps ? lat : null,
       'lng': validGps ? lng : null,
       'gpsFix': gpsFix,
       'sat': sat,
-      'audioEnabled': true,
-      'audioRecordingStatus': recordingStarted ? 'recording' : 'failed',
+      'audioEnabled': espAudioUrl.isNotEmpty,
+      'audioSource': 'necklace',
+      'audioRecordingStatus': audioStatus,
       'battery': battery,
       'batteryVoltage': voltage,
       'micLevel': micLevel,
@@ -261,16 +269,18 @@ class BleSyncService {
       battery: battery,
       batteryVoltage: voltage,
       micLevel: micLevel,
-      audioEnabled: true,
-      audioRecordingStatus: recordingStarted ? 'recording' : 'failed',
+      audioEnabled: espAudioUrl.isNotEmpty,
+      audioRecordingStatus: audioStatus,
+      espAudioUrl: espAudioUrl,
     );
 
-    if (recordingStarted) {
-      _finishAudioEvidenceUpload(
+    if (espAudioUrl.isNotEmpty) {
+      _finishEspAudioEvidenceUpload(
         uid: uid,
         deviceId: deviceId,
         alertId: alertRef.id,
         alertRef: alertRef,
+        espAudioUrl: espAudioUrl,
         lat: validGps ? lat : null,
         lng: validGps ? lng : null,
         gpsFix: gpsFix,
@@ -287,6 +297,24 @@ class BleSyncService {
     debugPrint('BLE SYNC SOS DONE: alertId=${alertRef.id}');
   }
 
+  String? _extractFieldFromRaw(String? raw, String key) {
+    if (raw == null || raw.trim().isEmpty) return null;
+
+    final parts = raw.split('|');
+
+    for (final part in parts) {
+      final index = part.indexOf('=');
+      if (index == -1) continue;
+
+      final k = part.substring(0, index).trim();
+      final v = part.substring(index + 1).trim();
+
+      if (k == key && v.isNotEmpty) return v;
+    }
+
+    return null;
+  }
+
   String _resolveDeviceIdFromUserData(Map<String, dynamic> userData) {
     final fromFirestore = userData['pairedDeviceId']?.toString();
     if (fromFirestore != null && fromFirestore.isNotEmpty) {
@@ -301,11 +329,12 @@ class BleSyncService {
     return 'SEEN_DEVICE';
   }
 
-  void _finishAudioEvidenceUpload({
+  void _finishEspAudioEvidenceUpload({
     required String uid,
     required String deviceId,
     required String alertId,
     required DocumentReference<Map<String, dynamic>> alertRef,
+    required String espAudioUrl,
     required double? lat,
     required double? lng,
     required bool gpsFix,
@@ -317,22 +346,22 @@ class BleSyncService {
     required String? raw,
     required List<String> emergencyContactIds,
   }) {
-    Future.delayed(const Duration(seconds: 15), () async {
+    Future.delayed(const Duration(seconds: 18), () async {
       try {
-        debugPrint('AUDIO RECORDING: stopping and uploading');
+        debugPrint('ESP AUDIO: downloading from $espAudioUrl');
 
-        final audioUrl =
-            await EvidenceRecordingService.instance.stopAndUploadAudio(
+        final firebaseAudioUrl = await _downloadAndUploadEspAudio(
           uid: uid,
           alertId: alertId,
+          espAudioUrl: espAudioUrl,
         );
 
-        if (audioUrl == null || audioUrl.isEmpty) {
-          debugPrint('AUDIO RECORDING: upload failed, audioUrl is null');
+        if (firebaseAudioUrl == null || firebaseAudioUrl.isEmpty) {
+          debugPrint('ESP AUDIO: upload failed');
 
           await alertRef.set({
             'audioRecordingStatus': 'failed',
-            'audioUploadError': 'audioUrl is null or empty',
+            'audioUploadError': 'ESP audio download/upload failed',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
 
@@ -340,7 +369,9 @@ class BleSyncService {
         }
 
         await alertRef.set({
-          'audioUrl': audioUrl,
+          'audioUrl': firebaseAudioUrl,
+          'espAudioUrl': espAudioUrl,
+          'audioSource': 'necklace',
           'audioRecordingStatus': 'uploaded',
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
@@ -352,7 +383,9 @@ class BleSyncService {
 
         for (final doc in liveSnap.docs) {
           await doc.reference.set({
-            'audioUrl': audioUrl,
+            'audioUrl': firebaseAudioUrl,
+            'espAudioUrl': espAudioUrl,
+            'audioSource': 'necklace',
             'audioRecordingStatus': 'uploaded',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
@@ -368,9 +401,11 @@ class BleSyncService {
           'title': 'Audio Evidence',
           'eventType': 'audio',
           'status': 'Uploaded',
-          'details': 'SOS audio recording saved.',
+          'details': 'SOS audio recording from SEEN necklace saved.',
           'alertId': alertId,
-          'audioUrl': audioUrl,
+          'audioUrl': firebaseAudioUrl,
+          'espAudioUrl': espAudioUrl,
+          'audioSource': 'necklace',
           'lat': lat,
           'lng': lng,
           'gpsFix': gpsFix,
@@ -394,7 +429,9 @@ class BleSyncService {
 
           for (final doc in incidents.docs) {
             await doc.reference.set({
-              'audioUrl': audioUrl,
+              'audioUrl': firebaseAudioUrl,
+              'espAudioUrl': espAudioUrl,
+              'audioSource': 'necklace',
               'audioRecordingStatus': 'uploaded',
               'updatedAt': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
@@ -406,15 +443,17 @@ class BleSyncService {
               .collection('linkedUsers')
               .doc(uid)
               .set({
-            'audioUrl': audioUrl,
+            'audioUrl': firebaseAudioUrl,
+            'espAudioUrl': espAudioUrl,
+            'audioSource': 'necklace',
             'audioRecordingStatus': 'uploaded',
             'updatedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
         }
 
-        debugPrint('AUDIO RECORDING: uploaded and saved');
+        debugPrint('ESP AUDIO: uploaded and saved');
       } catch (e) {
-        debugPrint('AUDIO UPLOAD ERROR: $e');
+        debugPrint('ESP AUDIO ERROR: $e');
 
         await alertRef.set({
           'audioRecordingStatus': 'failed',
@@ -423,6 +462,71 @@ class BleSyncService {
         }, SetOptions(merge: true));
       }
     });
+  }
+
+  Future<String?> _downloadAndUploadEspAudio({
+    required String uid,
+    required String alertId,
+    required String espAudioUrl,
+  }) async {
+    HttpClient? client;
+
+    try {
+      final uri = Uri.parse(espAudioUrl);
+      client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 10);
+
+      final request = await client.getUrl(uri);
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        debugPrint('ESP AUDIO: HTTP status ${response.statusCode}');
+        return null;
+      }
+
+      final bytes = await consolidateHttpClientResponseBytes(response);
+
+      if (bytes.isEmpty) {
+        debugPrint('ESP AUDIO: empty audio file');
+        return null;
+      }
+
+      debugPrint('ESP AUDIO: downloaded ${bytes.length} bytes');
+
+      final safeUid = uid.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+      final safeAlertId = alertId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+
+      final storageRef = FirebaseStorage.instance
+          .ref()
+          .child('evidence')
+          .child(safeUid)
+          .child(safeAlertId)
+          .child('audio.wav');
+
+      await storageRef.putData(
+        bytes,
+        SettableMetadata(
+          contentType: 'audio/wav',
+          customMetadata: {
+            'uid': uid,
+            'alertId': alertId,
+            'source': 'necklace',
+            'type': 'sos_audio',
+            'espAudioUrl': espAudioUrl,
+          },
+        ),
+      );
+
+      final downloadUrl = await storageRef.getDownloadURL();
+      debugPrint('ESP AUDIO: Firebase URL=$downloadUrl');
+
+      return downloadUrl;
+    } catch (e) {
+      debugPrint('ESP AUDIO DOWNLOAD/UPLOAD ERROR: $e');
+      return null;
+    } finally {
+      client?.close(force: true);
+    }
   }
 
   Future<List<String>> _loadEmergencyContactIds(String vulnerableUserId) async {
@@ -476,6 +580,7 @@ class BleSyncService {
     required int? micLevel,
     required bool audioEnabled,
     required String audioRecordingStatus,
+    required String espAudioUrl,
   }) async {
     final nowText = DateTime.now().toString();
 
@@ -497,10 +602,12 @@ class BleSyncService {
         'location': locationText,
         'streamUrl': streamUrl,
         'streamStatus': hasStream ? 'ready' : 'unavailable',
+        'espAudioUrl': espAudioUrl,
         'battery': battery,
         'batteryVoltage': batteryVoltage,
         'micLevel': micLevel,
         'audioEnabled': audioEnabled,
+        'audioSource': 'necklace',
         'audioRecordingStatus': audioRecordingStatus,
         'expiresAt': expiresAt,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -521,11 +628,13 @@ class BleSyncService {
         'userPhone': vulnerableUserPhone,
         'streamUrl': streamUrl,
         'streamStatus': hasStream ? 'ready' : 'unavailable',
+        'espAudioUrl': espAudioUrl,
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'expiresAt': expiresAt,
         'durationSeconds': 60,
         'audioEnabled': audioEnabled,
+        'audioSource': 'necklace',
         'audioRecordingStatus': audioRecordingStatus,
         'battery': battery,
         'batteryVoltage': batteryVoltage,
