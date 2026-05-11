@@ -33,10 +33,12 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _isLoading = false;
+  bool _acceptTerms = false;
 
   Future<void> _register() async {
     final lang = appLanguage;
     FocusScope.of(context).unfocus();
+
     setState(() {
       registerError = null;
       _isLoading = true;
@@ -80,9 +82,20 @@ class _SignUpScreenState extends State<SignUpScreen> {
       return;
     }
 
+    if (!_acceptTerms) {
+      setState(() {
+        registerError = lang.text(
+          en: "You must accept the Terms and Policies to create an account",
+          ar: "يجب الموافقة على الشروط والسياسات لإنشاء حساب",
+        );
+        _isLoading = false;
+      });
+      return;
+    }
+
     try {
-      final userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
+      final userCredential =
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: emailController.text.trim(),
         password: passwordController.text.trim(),
       );
@@ -96,6 +109,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
         'age': ageController.text.trim(),
         'gender': selectedGender,
         'role': selectedRole!.name,
+        'acceptedTerms': true,
+        'acceptedTermsAt': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
       });
 
@@ -291,13 +306,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
                         obscureText: _obscureConfirmPassword,
                         onToggleVisibility: () {
                           setState(() {
-                            _obscureConfirmPassword = !_obscureConfirmPassword;
+                            _obscureConfirmPassword =
+                                !_obscureConfirmPassword;
                           });
                         },
                       ),
 
+                      _buildTermsCheckbox(context),
+
                       if (registerError != null) ...[
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 12),
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(
@@ -393,6 +411,51 @@ class _SignUpScreenState extends State<SignUpScreen> {
     );
   }
 
+  Widget _buildTermsCheckbox(BuildContext context) {
+    final theme = Theme.of(context);
+    final lang = appLanguage;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Checkbox(
+            value: _acceptTerms,
+            activeColor: AppColors.emergencyRed,
+            onChanged: (value) {
+              setState(() {
+                _acceptTerms = value ?? false;
+              });
+            },
+          ),
+          Expanded(
+            child: GestureDetector(
+              onTap: () {
+                setState(() {
+                  _acceptTerms = !_acceptTerms;
+                });
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  lang.text(
+                    en: "I agree to the Terms and Policies",
+                    ar: "أوافق على الشروط والسياسات",
+                  ),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInput(
     BuildContext context,
     String label,
@@ -463,6 +526,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   Widget _buildGenderSelection(BuildContext context) {
     final lang = appLanguage;
+
     return _buildDropdown<String>(
       context: context,
       title: lang.text(en: "Gender", ar: "الجنس"),
@@ -484,6 +548,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   Widget _buildRoleSelection(BuildContext context) {
     final lang = appLanguage;
+
     return _buildDropdown<UserRole>(
       context: context,
       title: lang.text(en: "Role", ar: "الدور"),
@@ -502,10 +567,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
             lang.text(en: "Emergency Contact", ar: "جهة اتصال طوارئ"),
           ),
         ),
-        DropdownMenuItem(
-          value: UserRole.admin,
-          child: Text(lang.text(en: "Admin", ar: "مدير")),
-        ),
+      
       ],
       onChanged: (value) => setState(() => selectedRole = value),
     );
